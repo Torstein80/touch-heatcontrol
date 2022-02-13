@@ -2317,3 +2317,4 @@
 2131	2806	1644761160199200625	touch_element_waterproof.elf	1d3e9db54d93e273
 2807	2956	1644761160363207532	.bin_timestamp	b04f212507ea7149
 2956	3004	0	esp-idf/esptool_py/CMakeFiles/app_check_size	9c0b89ed7e1da60f
+0	2433709	0	CMakeFiles/confserver	f2957d50744d3685

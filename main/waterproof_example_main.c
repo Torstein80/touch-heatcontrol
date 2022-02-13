@@ -9,8 +9,88 @@
 #include "esp_log.h"
 #include "touch_element/touch_button.h"
 #include "driver/gpio.h"
+#include <esp_idf_version.h>
+#include <max7219.h>
+
+#ifndef APP_CPU_NUM
+#define APP_CPU_NUM PRO_CPU_NUM
+#endif
+
+#define SCROLL_DELAY 50
+#define CASCADE_SIZE 1
+
+#if ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(4, 0, 0)
+#define HOST    HSPI_HOST
+#else
+#define HOST    SPI2_HOST
+#endif
+
+#define PIN_NUM_MOSI 1
+#define PIN_NUM_CLK  3
+#define PIN_NUM_CS   2
+
+static const uint64_t symbols[] = {
+    0x383838fe7c381000, // arrows
+    0x10387cfe38383800,
+    0x10307efe7e301000,
+    0x1018fcfefc181000,
+    0x10387cfefeee4400, // heart
+    0x105438ee38541000, // sun
+
+    0x7e1818181c181800, // digits
+    0x7e060c3060663c00,
+    0x3c66603860663c00,
+    0x30307e3234383000,
+    0x3c6660603e067e00,
+    0x3c66663e06663c00,
+    0x1818183030667e00,
+    0x3c66663c66663c00,
+    0x3c66607c66663c00,
+    0x3c66666e76663c00
+};
+const static size_t symbols_size = sizeof(symbols) - sizeof(uint64_t) * CASCADE_SIZE;
+
+void task(void *pvParameter)
+{
+    esp_err_t res;
+
+    // Configure SPI bus
+    spi_bus_config_t cfg = {
+       .mosi_io_num = PIN_NUM_MOSI,
+       .miso_io_num = -1,
+       .sclk_io_num = PIN_NUM_CLK,
+       .quadwp_io_num = -1,
+       .quadhd_io_num = -1,
+       .max_transfer_sz = 0,
+       .flags = 0
+    };
+    ESP_ERROR_CHECK(spi_bus_initialize(HOST, &cfg, 1));
+
+    // Configure device
+    max7219_t dev = {
+       .cascade_size = CASCADE_SIZE,
+       .digits = 0,
+       .mirrored = true
+    };
+    ESP_ERROR_CHECK(max7219_init_desc(&dev, HOST, PIN_NUM_CS));
+    ESP_ERROR_CHECK(max7219_init(&dev))
+    ;
+    size_t offs = 0;
+    while (1)
+    {
+        printf("---------- draw\n");
+
+        for (uint8_t c = 0; c < CASCADE_SIZE; c ++)
+            max7219_draw_image_8x8(&dev, c * 8, (uint8_t *)symbols + c * 8 + offs);
+        vTaskDelay(pdMS_TO_TICKS(SCROLL_DELAY));
+
+        if (++offs == symbols_size)
+            offs = 0;
+    }
+}
 
 
+//---------------------------------------------------------------------------------------------------
 static const char *TAG = "Touch Element Waterproof Example";
 #define TOUCH_BUTTON_NUM     6
 
@@ -63,17 +143,20 @@ static const float channel_sens_array[TOUCH_BUTTON_NUM] = {
 #define button_mode_button 3
 int mode_button_state = 1;
 
+#define button_on_off 2
+int button_on_off_state = 1;
+
 #define button_grips 5
-int button_grips_state = 1;
+int button_grips_state = 0;
 
 #define button_driver_seat 5
-int button_driver_seat_state = 1;
+int button_driver_seat_state = 0;
 
 #define button_Passenger_seat 5
-int button_Passenger_seat_state = 1;
+int button_Passenger_seat_state = 0;
 
 #define button_backrest 5
-int button_backrest_state = 1;
+int button_backrest_state = 0;
 
 
 
@@ -116,24 +199,52 @@ static void button_handler_task(void *arg)
         
         if (button_message->event == TOUCH_BUTTON_EVT_ON_PRESS) {
             ESP_LOGI(TAG, "Button[%d] Press", (uint32_t)element_message.arg);
-            ESP_LOGI(TAG, "mode[%d]", (int)mode_button_state); 
+            
  
             if((uint32_t)element_message.arg == 4){
                 ESP_LOGI(TAG, "button_backrest is pressed"); 
-
+                if(button_backrest_state >= button_backrest){
+                    button_backrest_state = 0;
+                    }
+                else if (button_backrest_state < 6){
+                    button_backrest_state++;                    
+                    }
+            ESP_LOGI(TAG, "button_backrest mode[%d]", (int)button_backrest_state);  
             }
+
             else if((uint32_t)element_message.arg == 5){
                 ESP_LOGI(TAG, "button_Passenger_seat is pressed"); 
-
+                if(button_Passenger_seat_state >= button_Passenger_seat){
+                    button_Passenger_seat_state = 0;
+                    }
+                else if (button_Passenger_seat_state < 6){
+                    button_Passenger_seat_state++;                    
+                    }
+            ESP_LOGI(TAG, "button_Passenger_seat mode[%d]", (int)button_Passenger_seat_state); 
             }
+
             else if((uint32_t)element_message.arg == 6){
                 ESP_LOGI(TAG, "button_driver_seat is pressed"); 
-
+                if(button_driver_seat_state >= button_driver_seat){
+                    button_driver_seat_state = 0;
+                    }
+                else if (button_driver_seat_state < 6){
+                    button_driver_seat_state++;                    
+                    }
+            ESP_LOGI(TAG, "button_driver_seat mode[%d]", (int)button_driver_seat_state); 
             }
+
             else if((uint32_t)element_message.arg == 7){
                 ESP_LOGI(TAG, "button_on_off is pressed"); 
-
+                if(button_on_off_state >= button_on_off){
+                    button_on_off_state = 1;
+                    }
+                else if (button_on_off_state < 3){
+                    button_on_off_state++;                    
+                    }
+            ESP_LOGI(TAG, "button_on_off mode[%d]", (int)button_on_off_state); 
             }
+
             else if ((uint32_t)element_message.arg == 10){
                 ESP_LOGI(TAG, "Mode button is pressed");                  
                 if(mode_button_state >= button_mode_button){
@@ -141,11 +252,19 @@ static void button_handler_task(void *arg)
                     }
                 else if (mode_button_state < 4){
                     mode_button_state++;                    
-                    }                    
+                    }
+            ESP_LOGI(TAG, "mode button mode [%d]", (int)mode_button_state);                     
             }
+
             else if((uint32_t)element_message.arg == 11){
                 ESP_LOGI(TAG, "button_grips is pressed"); 
-
+                if(button_grips_state >= button_grips){
+                    button_grips_state = 0;
+                    }
+                else if (button_grips_state < 6){
+                    button_grips_state++;                    
+                    }
+            ESP_LOGI(TAG, "button_grips mode[%d]", (int)button_grips_state); 
             }
         } else if (button_message->event == TOUCH_BUTTON_EVT_ON_RELEASE) {
             ESP_LOGI(TAG, "Button[%d] Release", (uint32_t)element_message.arg);
@@ -206,4 +325,6 @@ void app_main(void)
     touch_element_start();
 
     xTaskCreate(&mode_button, "mode_button", 4 * 1024, NULL, 5, NULL);
+
+    xTaskCreatePinnedToCore(task, "task", configMINIMAL_STACK_SIZE * 3, NULL, 5, NULL, APP_CPU_NUM);
 }

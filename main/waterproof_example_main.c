@@ -1,16 +1,11 @@
-/*
- * SPDX-FileCopyrightText: 2021 Espressif Systems (Shanghai) CO LTD
- *
- * SPDX-License-Identifier: CC0-1.0
- */
-
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "touch_element/touch_button.h"
 #include "driver/gpio.h"
-#include <esp_idf_version.h>
-#include <max7219.h>
+#include "esp_idf_version.h"
+#include "max7219.h"
+#include "stdio.h"
 
 #ifndef APP_CPU_NUM
 #define APP_CPU_NUM PRO_CPU_NUM
@@ -27,7 +22,9 @@
 
 #define PIN_NUM_MOSI 1
 #define PIN_NUM_CLK  3
-#define PIN_NUM_CS   2
+#define PIN_NUM_CS   2 //LOAD pin12 on max 7219
+
+
 
 static const uint64_t symbols[] = {
     0x383838fe7c381000, // arrows
@@ -53,7 +50,7 @@ const static size_t symbols_size = sizeof(symbols) - sizeof(uint64_t) * CASCADE_
 void task(void *pvParameter)
 {
     esp_err_t res;
-
+    
     // Configure SPI bus
     spi_bus_config_t cfg = {
        .mosi_io_num = PIN_NUM_MOSI,
@@ -79,6 +76,7 @@ void task(void *pvParameter)
     while (1)
     {
         printf("---------- draw\n");
+        
 
         for (uint8_t c = 0; c < CASCADE_SIZE; c ++)
             max7219_draw_image_8x8(&dev, c * 8, (uint8_t *)symbols + c * 8 + offs);
@@ -321,10 +319,11 @@ void app_main(void)
     }
     ESP_LOGI(TAG, "Touch buttons create");
     /*< Create a monitor task to take Touch Button event */
-    xTaskCreate(&button_handler_task, "button_handler_task", 4 * 1024, NULL, 5, NULL);
+    xTaskCreate(&button_handler_task, "button_handler_task", 4 * 1024, NULL, 4, NULL);
     touch_element_start();
 
-    xTaskCreate(&mode_button, "mode_button", 4 * 1024, NULL, 5, NULL);
+    xTaskCreate(&mode_button, "mode_button", 4 * 1024, NULL, 3, NULL);
+    xTaskCreate(&task, "task", 4 * 1024, NULL, 5, NULL);
 
-    xTaskCreatePinnedToCore(task, "task", configMINIMAL_STACK_SIZE * 3, NULL, 5, NULL, APP_CPU_NUM);
+    // xTaskCreatePinnedToCore(task, "task", 4096 * 3, NULL, 5, NULL, APP_CPU_NUM); //configMINIMAL_STACK_SIZE
 }

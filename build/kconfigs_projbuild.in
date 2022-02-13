@@ -1,0 +1,6 @@
+source "/home/torstein/esp/esp-idf/components/app_update/Kconfig.projbuild"
+source "/home/torstein/esp/esp-idf/components/bootloader/Kconfig.projbuild"
+source "/home/torstein/esp/esp-idf/components/esp_rom/Kconfig.projbuild"
+source "/home/torstein/esp/esp-idf/components/esptool_py/Kconfig.projbuild"
+source "/home/torstein/esp/esp-idf/components/partition_table/Kconfig.projbuild"
+source "/home/torstein/Documents/touch1.1/touch_element_waterproof/main/Kconfig.projbuild"

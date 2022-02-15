@@ -27,23 +27,25 @@
 
 
 static const uint64_t symbols[] = {
-    0x383838fe7c381000, // arrows
-    0x10387cfe38383800,
-    0x10307efe7e301000,
-    0x1018fcfefc181000,
-    0x10387cfefeee4400, // heart
-    0x105438ee38541000, // sun
+    0x00000000f0e0f0f8
 
-    0x7e1818181c181800, // digits
-    0x7e060c3060663c00,
-    0x3c66603860663c00,
-    0x30307e3234383000,
-    0x3c6660603e067e00,
-    0x3c66663e06663c00,
-    0x1818183030667e00,
-    0x3c66663c66663c00,
-    0x3c66607c66663c00,
-    0x3c66666e76663c00
+    // 0x383838fe7c381000, // arrows
+    // 0x10387cfe38383800,
+    // 0x10307efe7e301000,
+    // 0x1018fcfefc181000,
+    // 0x10387cfefeee4400, // heart
+    // 0x105438ee38541000, // sun
+
+    // 0x7e1818181c181800, // digits
+    // 0x7e060c3060663c00,
+    // 0x3c66603860663c00,
+    // 0x30307e3234383000,
+    // 0x3c6660603e067e00,
+    // 0x3c66663e06663c00,
+    // 0x1818183030667e00,
+    // 0x3c66663c66663c00,
+    // 0x3c66607c66663c00,
+    // 0x3c66666e76663c00
 };
 const static size_t symbols_size = sizeof(symbols) - sizeof(uint64_t) * CASCADE_SIZE;
 
@@ -67,7 +69,7 @@ void task(void *pvParameter)
     max7219_t dev = {
        .cascade_size = CASCADE_SIZE,
        .digits = 0,
-       .mirrored = true
+       .mirrored = false
     };
     ESP_ERROR_CHECK(max7219_init_desc(&dev, HOST, PIN_NUM_CS));
     ESP_ERROR_CHECK(max7219_init(&dev))
@@ -75,11 +77,14 @@ void task(void *pvParameter)
     size_t offs = 0;
     while (1)
     {
-        printf("---------- draw\n");
-        
+        // printf("---------- draw\n");
+  
+        // max7219_clear(&dev);
+        // for (uint8_t i = pos, offs = 0; i < dev->digits && offs < 8; i++, offs++)
+        // max7219_set_digit(dev, i, *((uint8_t *)image + offs));
 
-        for (uint8_t c = 0; c < CASCADE_SIZE; c ++)
-            max7219_draw_image_8x8(&dev, c * 8, (uint8_t *)symbols + c * 8 + offs);
+        for (uint8_t c = 0; c < CASCADE_SIZE; c ++)       
+        max7219_draw_image_8x8(&dev, c * 8, (uint8_t *)symbols + c * 8); // + offs
         vTaskDelay(pdMS_TO_TICKS(SCROLL_DELAY));
 
         if (++offs == symbols_size)
@@ -317,13 +322,13 @@ void app_main(void)
         ESP_ERROR_CHECK(touch_element_waterproof_add(button_handle[i]));
 #endif
     }
+    xTaskCreate(&task, "task", 4 * configMINIMAL_STACK_SIZE , NULL, 5, NULL);
+    // xTaskCreatePinnedToCore(task, "task", configMINIMAL_STACK_SIZE * 3, NULL, 5, NULL, 0); //configMINIMAL_STACK_SIZE   APP_CPU_NUM
+    
     ESP_LOGI(TAG, "Touch buttons create");
     /*< Create a monitor task to take Touch Button event */
-    xTaskCreate(&button_handler_task, "button_handler_task", 4 * 1024, NULL, 4, NULL);
+    xTaskCreate(&button_handler_task, "button_handler_task", 4 * configMINIMAL_STACK_SIZE, NULL, 4, NULL);
     touch_element_start();
 
-    xTaskCreate(&mode_button, "mode_button", 4 * 1024, NULL, 3, NULL);
-    xTaskCreate(&task, "task", 4 * 1024, NULL, 5, NULL);
-
-    // xTaskCreatePinnedToCore(task, "task", 4096 * 3, NULL, 5, NULL, APP_CPU_NUM); //configMINIMAL_STACK_SIZE
+    xTaskCreate(&mode_button, "mode_button", 34* configMINIMAL_STACK_SIZE , NULL, 4, NULL);
 }

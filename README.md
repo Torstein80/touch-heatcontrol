@@ -1,43 +1,51 @@
 | Supported Targets | ESP32-S2 |
 | ----------------- | -------- |
 
-# Touch Element waterproof Example
+# Functional description
+On/off button:
+-When power is applied, on/off state is remembered, hence if button is off before previous power off, system is off when power is applied again.
 
-This example demonstrates how to use the Touch Element library of capacitive Touch Sensor and setup the touch elements with touch element waterproof protection.
+Mode button:
+-Toggles between Auto, Manual and Dewpoint mode
 
-## How to use example
+Grip/throttle button:
+-Press: Grips power level
+-Long press: Thumb power level
 
-### Build and Flash
+Other buttons:
+-Set power levels on press
 
-Build the project and flash it to the board, then run monitor tool to view serial output:
+Auto mode:
+- inputs: Temp and Relative humidity.
+-- Temp array give input to power level
+-- Relative humidity > 90% set 100% power level for 30 minutes, then off or whatever temp array demands
 
-```
-idf.py -p PORT flash monitor
-```
+Manual mode:
+-All settings are set manual, settings are remembered between power cycles
 
-(Replace PORT with the name of the serial port to use.)
+Dewpoint mode:
+-input: Relative humidity
+-- Relative humidity > 90% set 100% power level for 30 minutes, then off
 
-(To exit the serial monitor, type ``Ctrl-]``.)
+# Hardware layout
+The touch element board is connected to the control board via a pin header and is one module when plugged together. 
+The power board is located separately via wires and supply power to the heating elements. The power levels are controlled via PWM signals from the control board to the power board.
 
-See the Getting Started Guide for full steps to configure and use ESP-IDF to build projects.
+## Touch element board
+### Touch elements
+Touch Element hardware is designed based on Touch Element waterproof Example
+https://docs.espressif.com/projects/esp-idf/en/latest/esp32s2/api-reference/peripherals/touch_element.html
 
-## Example Output
+### Indicator leds
+power levels matrix are driven by max7219 driver from ESP-IDF-LIB
+https://esp-idf-lib.readthedocs.io/en/latest/groups/max7219.html
 
-This example's output maybe could not give a strong feeling to user since the waterproof function works
-automatically and silently inside the Touch Element library
+## Control board
+### ESP32S2 Wrover
 
-```
-I (331) Touch Element Waterproof Example: Touch Element library install
-I (331) Touch Element Waterproof Example: Touch Element waterproof install
-I (341) Touch Element Waterproof Example: Touch button install
-I (351) Touch Element Waterproof Example: Touch buttons create
-I (3191) Touch Element Waterproof Example: Button[7] Press
-I (4191) Touch Element Waterproof Example: Button[7] LongPress
-I (5191) Touch Element Waterproof Example: Button[7] LongPress
-I (5671) Touch Element Waterproof Example: Button[7] Release
-I (12561) Touch Element Waterproof Example: Button[9] Press
-I (12811) Touch Element Waterproof Example: Button[9] Release
-```
+### Temp and humidity sensor
 
-See the README.md file in the upper level 'examples' directory for more information about examples.
-# touch-heatcontrol
+### Max7219 LED driver
+
+## Power board
+### Hardware description 

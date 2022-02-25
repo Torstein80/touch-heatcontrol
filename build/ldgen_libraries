@@ -92,6 +92,7 @@
 /home/torstein/Documents/touch1.1/touch_element_waterproof/build/esp-idf/ds3231/libds3231.a
 /home/torstein/Documents/touch1.1/touch_element_waterproof/build/esp-idf/ds3502/libds3502.a
 /home/torstein/Documents/touch1.1/touch_element_waterproof/build/esp-idf/encoder/libencoder.a
+/home/torstein/Documents/touch1.1/touch_element_waterproof/build/esp-idf/esp_littlefs/libesp_littlefs.a
 /home/torstein/Documents/touch1.1/touch_element_waterproof/build/esp-idf/example/libexample.a
 /home/torstein/Documents/touch1.1/touch_element_waterproof/build/esp-idf/framebuffer/libframebuffer.a
 /home/torstein/Documents/touch1.1/touch_element_waterproof/build/esp-idf/hd44780/libhd44780.a

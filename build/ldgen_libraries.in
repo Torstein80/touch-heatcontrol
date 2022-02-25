@@ -92,6 +92,7 @@ $<TARGET_FILE:__idf_ds18x20>
 $<TARGET_FILE:__idf_ds3231>
 $<TARGET_FILE:__idf_ds3502>
 $<TARGET_FILE:__idf_encoder>
+$<TARGET_FILE:__idf_esp_littlefs>
 $<TARGET_FILE:__idf_example>
 $<TARGET_FILE:__idf_framebuffer>
 $<TARGET_FILE:__idf_hd44780>

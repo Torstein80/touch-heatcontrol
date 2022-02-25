@@ -827,6 +827,13 @@
 /home/torstein/Documents/touch1.1/touch_element_waterproof/build/esp-idf/encoder/CMakeFiles/rebuild_cache.dir
 /home/torstein/Documents/touch1.1/touch_element_waterproof/build/esp-idf/encoder/CMakeFiles/install.dir
 /home/torstein/Documents/touch1.1/touch_element_waterproof/build/esp-idf/encoder/CMakeFiles/list_install_components.dir
+/home/torstein/Documents/touch1.1/touch_element_waterproof/build/esp-idf/esp_littlefs/CMakeFiles/install/strip.dir
+/home/torstein/Documents/touch1.1/touch_element_waterproof/build/esp-idf/esp_littlefs/CMakeFiles/install/local.dir
+/home/torstein/Documents/touch1.1/touch_element_waterproof/build/esp-idf/esp_littlefs/CMakeFiles/__idf_esp_littlefs.dir
+/home/torstein/Documents/touch1.1/touch_element_waterproof/build/esp-idf/esp_littlefs/CMakeFiles/install.dir
+/home/torstein/Documents/touch1.1/touch_element_waterproof/build/esp-idf/esp_littlefs/CMakeFiles/list_install_components.dir
+/home/torstein/Documents/touch1.1/touch_element_waterproof/build/esp-idf/esp_littlefs/CMakeFiles/edit_cache.dir
+/home/torstein/Documents/touch1.1/touch_element_waterproof/build/esp-idf/esp_littlefs/CMakeFiles/rebuild_cache.dir
 /home/torstein/Documents/touch1.1/touch_element_waterproof/build/esp-idf/example/CMakeFiles/install/strip.dir
 /home/torstein/Documents/touch1.1/touch_element_waterproof/build/esp-idf/example/CMakeFiles/install/local.dir
 /home/torstein/Documents/touch1.1/touch_element_waterproof/build/esp-idf/example/CMakeFiles/__idf_example.dir

@@ -34,11 +34,18 @@ Dewpoint mode:
 #include "esp_idf_version.h"
 #include "max7219.h"
 #include "stdio.h"
-#include "esp_system.h"
-#include "nvs_flash.h"
-#include "nvs.h"
+#include "esp_littlefs.h"
+// #include "esp_system.h"
+// #include "nvs_flash.h"
+// #include "nvs.h"
+#include <dht.h>
+#include "driver/ledc.h"
+#include "esp_err.h"
 
 
+
+static const dht_sensor_type_t sensor_type = DHT_TYPE_AM2301; //AM2301 is for DHT22
+static const gpio_num_t dht_gpio = 38;
 
 #ifndef APP_CPU_NUM
 #define APP_CPU_NUM PRO_CPU_NUM
@@ -53,9 +60,9 @@ Dewpoint mode:
 #define HOST    SPI2_HOST
 #endif
 
-#define PIN_NUM_MOSI 1
-#define PIN_NUM_CLK  3
-#define PIN_NUM_CS   2 //LOAD pin12 on max 7219
+#define PIN_NUM_MOSI 1  //max 7219
+#define PIN_NUM_CLK  3  //max 7219
+#define PIN_NUM_CS   2  //LOAD pin12 on max 7219
 
 
 
@@ -81,13 +88,11 @@ static const u_char led_states[] = { // Possible led states that can be assigned
     0b11111000      // 5 led
 };
 
-static const char *TAG02 = "max7219 task";
 
-
-
-
-//---------------------------------------------------------------------------------------------------
 static const char *TAG = "Touch Element: ";
+static const char *TAG02 = "max7219 task";
+static const char *TAG03 = "DHT22: ";
+
 #define TOUCH_BUTTON_NUM     6
 
 /*< Touch buttons handle */
@@ -113,16 +118,50 @@ static const float channel_sens_array[TOUCH_BUTTON_NUM] = {
     0.15F,
 };
 
-bool press = false;
-bool long_press = false;
-bool release = false;
+bool press = false;         // for button logic
+bool long_press = false;    // for button logic
+bool release = false;       // for button logic
 
-#define led_auto 35
-#define led_manual 36
-#define led_dewpoint 37
+#define led_auto 35         //gpio for mode LED
+#define led_manual 36       //gpio for mode LED
+#define led_dewpoint 37     //gpio for mode LED
 
-#define button_mode_button 2
-int mode_b_state= 0;
+#define LEDC_LS_CH0_GPIO       (35)
+#define LEDC_LS_CH0_CHANNEL    LEDC_CHANNEL_0
+
+#define LEDC_LS_CH1_GPIO       (36)
+#define LEDC_LS_CH1_CHANNEL    LEDC_CHANNEL_1
+
+#define LEDC_LS_CH2_GPIO       (37)
+#define LEDC_LS_CH2_CHANNEL    LEDC_CHANNEL_2
+
+#define LEDC_LS_CH3_GPIO       (16)     //tmb PWM
+#define LEDC_LS_CH3_CHANNEL    LEDC_CHANNEL_3
+
+#define LEDC_LS_CH4_GPIO       (17)     //grip PWM
+#define LEDC_LS_CH4_CHANNEL    LEDC_CHANNEL_4
+
+#define LEDC_LS_CH5_GPIO       (21)     // driver seat PWM
+#define LEDC_LS_CH5_CHANNEL    LEDC_CHANNEL_5
+
+#define LEDC_LS_CH6_GPIO       (33)     // Passenger seat PWM
+#define LEDC_LS_CH6_CHANNEL    LEDC_CHANNEL_6
+
+#define LEDC_LS_CH7_GPIO       (34)     // Back rest PWM
+#define LEDC_LS_CH7_CHANNEL    LEDC_CHANNEL_7
+
+#define LEDC_LS_TIMER          LEDC_TIMER_1
+#define LEDC_LS_MODE           LEDC_LOW_SPEED_MODE
+
+#define LEDC_CH_NUM       (8)
+#define LEDC_DUTY        (1000) //4000
+#define LEDC_FADE_TIME    (3000)
+
+
+
+
+#define button_mode_button 2    // #of modes
+int mode_b_state= 0;            // Current button state
 
 #define button_on_off 1
 int on_off_b_state = 0;
@@ -138,7 +177,7 @@ int driver_b_state = 0;
 int pass_b_state = 0;
 
 #define button_backrest 5
-int back_b_state = 0;
+uint16_t back_b_state = 0;
 
 int *power_levels[4];   // array for current power levels, input may come from different modes/user input
 int pl_0;               // input for power level @ array index 0
@@ -146,6 +185,37 @@ int pl_1;               // input for power level @ array index 1
 int pl_2;               // input for power level @ array index 2
 int pl_3;               // input for power level @ array index 3
 
+// nvs_handle_t my_handle;
+
+void dht22(void *pvParameters)
+{
+    int16_t temperature = 0;
+    int16_t humidity = 0;
+
+    // DHT sensors that come mounted on a PCB generally have
+    // pull-up resistors on the data pin.  It is recommended
+    // to provide an external pull-up resistor otherwise...
+
+    gpio_set_pull_mode(dht_gpio, GPIO_PULLUP_ONLY);
+
+    while (1)
+    {
+        // dht_read_data(sensor_type, dht_gpio, &humidity, &temperature);
+        // ESP_LOGI(TAG03, "Humidity: %d%% Temp: %dC\n", humidity / 10, temperature / 10);
+        if (dht_read_data(sensor_type, dht_gpio, &humidity, &temperature) == ESP_OK)
+            ESP_LOGI(TAG03, "Humidity: %d%% Temp: %dC\n", humidity / 10, temperature / 10); 
+            // printf("Humidity: %d%% Temp: %dC\n", humidity / 10, temperature / 10);
+        else
+            ESP_LOGI(TAG03, "Could not read data from sensor\n"); 
+            // printf("Could not read data from sensor\n");
+            
+
+        // If you read the sensor data too often, it will heat up
+        // http://www.kandrsmith.org/RJS/Misc/Hygrometers/dht_sht_how_fast.html
+        
+        vTaskDelay(pdMS_TO_TICKS(2000));
+    }
+}
 
 void task(void *pvParameter)
 {
@@ -202,8 +272,14 @@ void mode_manual(void *pvParameter){
     // Manual mode:
     // -All settings are set manual, settings are remembered between power cycles
     while(1){
-
-        pl_0 = back_b_state;
+        
+        if(pl_0 != back_b_state){
+            pl_0 = back_b_state;
+            // pl_0 = nvs_get_i16(my_handle, "back_b_state", back_b_state);        
+            ESP_LOGI(TAG02, "Test of counter[%d] ", back_b_state); 
+            }
+    
+        
         pl_1 = pass_b_state;
         pl_2 = driver_b_state;
         pl_3 = grips_b_state;
@@ -227,6 +303,96 @@ void mode_dewpoint(void *pvParameter){
 
 void buttons_modes(void *pvParameter)
 {
+    ledc_timer_config_t ledc_timer = {
+        .duty_resolution = LEDC_TIMER_13_BIT, // resolution of PWM duty
+        .freq_hz = 5000,                      // frequency of PWM signal
+        .speed_mode = LEDC_LS_MODE,           // timer mode
+        .timer_num = LEDC_LS_TIMER,            // timer index
+        .clk_cfg = LEDC_AUTO_CLK,              // Auto select the source clock
+    };
+    
+    ledc_timer_config(&ledc_timer);
+
+    ledc_channel_config_t ledc_channel[LEDC_CH_NUM] = {
+        {
+            .channel    = LEDC_LS_CH0_CHANNEL,
+            .duty       = 0,
+            .gpio_num   = LEDC_LS_CH0_GPIO,
+            .speed_mode = LEDC_LS_MODE,
+            .hpoint     = 0,
+            .timer_sel  = LEDC_LS_TIMER,
+            .flags.output_invert = 0
+        },
+        {
+            .channel    = LEDC_LS_CH1_CHANNEL,
+            .duty       = 0,
+            .gpio_num   = LEDC_LS_CH1_GPIO,
+            .speed_mode = LEDC_LS_MODE,
+            .hpoint     = 0,
+            .timer_sel  = LEDC_LS_TIMER,
+            .flags.output_invert = 0
+        },
+        {
+            .channel    = LEDC_LS_CH2_CHANNEL,
+            .duty       = 0,
+            .gpio_num   = LEDC_LS_CH2_GPIO,
+            .speed_mode = LEDC_LS_MODE,
+            .hpoint     = 0,
+            .timer_sel  = LEDC_LS_TIMER,
+            .flags.output_invert = 0
+        },
+        {
+            .channel    = LEDC_LS_CH3_CHANNEL,
+            .duty       = 0,
+            .gpio_num   = LEDC_LS_CH3_GPIO,
+            .speed_mode = LEDC_LS_MODE,
+            .hpoint     = 0,
+            .timer_sel  = LEDC_LS_TIMER,
+            .flags.output_invert = 0
+        },
+        {
+            .channel    = LEDC_LS_CH4_CHANNEL,
+            .duty       = 0,
+            .gpio_num   = LEDC_LS_CH4_GPIO,
+            .speed_mode = LEDC_LS_MODE,
+            .hpoint     = 0,
+            .timer_sel  = LEDC_LS_TIMER,
+            .flags.output_invert = 0
+        },
+        {
+            .channel    = LEDC_LS_CH5_CHANNEL,
+            .duty       = 0,
+            .gpio_num   = LEDC_LS_CH5_GPIO,
+            .speed_mode = LEDC_LS_MODE,
+            .hpoint     = 0,
+            .timer_sel  = LEDC_LS_TIMER,
+            .flags.output_invert = 0
+        },
+        {
+            .channel    = LEDC_LS_CH6_CHANNEL,
+            .duty       = 0,
+            .gpio_num   = LEDC_LS_CH6_GPIO,
+            .speed_mode = LEDC_LS_MODE,
+            .hpoint     = 0,
+            .timer_sel  = LEDC_LS_TIMER,
+            .flags.output_invert = 0
+        },
+        {
+            .channel    = LEDC_LS_CH7_CHANNEL,
+            .duty       = 0,
+            .gpio_num   = LEDC_LS_CH7_GPIO,
+            .speed_mode = LEDC_LS_MODE,
+            .hpoint     = 0,
+            .timer_sel  = LEDC_LS_TIMER,
+            .flags.output_invert = 0
+        },
+    };
+
+    // Set LED Controller with previously prepared configuration
+    for (int ch = 0; ch < LEDC_CH_NUM; ch++) {
+        ledc_channel_config(&ledc_channel[ch]);
+    }
+
     TaskHandle_t xMode_auto;
     TaskHandle_t xMode_manual;
     TaskHandle_t xMode_dewpoint;
@@ -238,14 +404,14 @@ void buttons_modes(void *pvParameter)
     xTaskCreate(&mode_dewpoint, "mode_dewpoint", 4* 1024, NULL, 4, &xMode_dewpoint);
     vTaskSuspend(xMode_dewpoint);
 
-    gpio_pad_select_gpio(led_auto);
-    gpio_set_direction(led_auto, GPIO_MODE_OUTPUT);
+    // gpio_pad_select_gpio(led_auto);
+    // gpio_set_direction(led_auto, GPIO_MODE_OUTPUT);
 
-    gpio_pad_select_gpio(led_manual);
-    gpio_set_direction(led_manual, GPIO_MODE_OUTPUT);
+    // gpio_pad_select_gpio(led_manual);
+    // gpio_set_direction(led_manual, GPIO_MODE_OUTPUT);
 
-    gpio_pad_select_gpio(led_dewpoint);
-    gpio_set_direction(led_dewpoint, GPIO_MODE_OUTPUT);
+    // gpio_pad_select_gpio(led_dewpoint);
+    // gpio_set_direction(led_dewpoint, GPIO_MODE_OUTPUT);
 
     while(1){ 
         // Write current power level to power_levels array.
@@ -268,9 +434,14 @@ void buttons_modes(void *pvParameter)
             vTaskSuspend(xMode_auto);
             vTaskSuspend(xMode_manual);
             vTaskSuspend(xMode_dewpoint);
-            gpio_set_level(led_auto, 0);
-            gpio_set_level(led_manual, 0); 
-            gpio_set_level(led_dewpoint, 0); 
+            ledc_set_duty(ledc_channel[0].speed_mode, ledc_channel[0].channel, 0);
+            ledc_update_duty(ledc_channel[0].speed_mode, ledc_channel[0].channel);
+
+            ledc_set_duty(ledc_channel[1].speed_mode, ledc_channel[1].channel, 0);
+            ledc_update_duty(ledc_channel[1].speed_mode, ledc_channel[1].channel);
+
+            ledc_set_duty(ledc_channel[2].speed_mode, ledc_channel[2].channel, 0);
+            ledc_update_duty(ledc_channel[2].speed_mode, ledc_channel[2].channel);
             pl_0 = 0;
             pl_1 = 0;
             pl_2 = 0;
@@ -287,25 +458,49 @@ void buttons_modes(void *pvParameter)
                 vTaskResume(xMode_auto);
                 vTaskSuspend(xMode_manual);
                 vTaskSuspend(xMode_dewpoint);
-                gpio_set_level(led_auto, 0);
-                gpio_set_level(led_manual, 0); 
-                gpio_set_level(led_dewpoint, 0); 
+                ledc_set_duty(ledc_channel[0].speed_mode, ledc_channel[0].channel, LEDC_DUTY);
+                ledc_update_duty(ledc_channel[0].speed_mode, ledc_channel[0].channel);
+
+                ledc_set_duty(ledc_channel[1].speed_mode, ledc_channel[1].channel, 0);
+                ledc_update_duty(ledc_channel[1].speed_mode, ledc_channel[1].channel);
+
+                ledc_set_duty(ledc_channel[2].speed_mode, ledc_channel[2].channel, 0);
+                ledc_update_duty(ledc_channel[2].speed_mode, ledc_channel[2].channel);
+                // gpio_set_level(led_auto, 0);
+                // gpio_set_level(led_manual, 0); 
+                // gpio_set_level(led_dewpoint, 0); 
             }
             else if(mode_b_state == 1){         // Manual mode
                 vTaskSuspend(xMode_auto);
                 vTaskResume(xMode_manual);
                 vTaskSuspend(xMode_dewpoint);
-                gpio_set_level(led_auto, 0);
-                gpio_set_level(led_manual, 1); 
-                gpio_set_level(led_dewpoint, 0); 
+                // gpio_set_level(led_auto, 0);
+                // gpio_set_level(led_manual, 1); 
+                // gpio_set_level(led_dewpoint, 0); 
+                ledc_set_duty(ledc_channel[0].speed_mode, ledc_channel[0].channel, 0);
+                ledc_update_duty(ledc_channel[0].speed_mode, ledc_channel[0].channel);
+
+                ledc_set_duty(ledc_channel[1].speed_mode, ledc_channel[1].channel, LEDC_DUTY);
+                ledc_update_duty(ledc_channel[1].speed_mode, ledc_channel[1].channel);
+
+                ledc_set_duty(ledc_channel[2].speed_mode, ledc_channel[2].channel, 0);
+                ledc_update_duty(ledc_channel[2].speed_mode, ledc_channel[2].channel);
             } 
             else if(mode_b_state == 2){         // Dewpoint mode
                 vTaskSuspend(xMode_auto);
                 vTaskSuspend(xMode_manual);
                 vTaskResume(xMode_dewpoint);
-                gpio_set_level(led_auto, 0);
-                gpio_set_level(led_manual, 0); 
-                gpio_set_level(led_dewpoint, 1); 
+                // gpio_set_level(led_auto, 0);
+                // gpio_set_level(led_manual, 0); 
+                // gpio_set_level(led_dewpoint, 1); 
+                ledc_set_duty(ledc_channel[0].speed_mode, ledc_channel[0].channel, 0);
+                ledc_update_duty(ledc_channel[0].speed_mode, ledc_channel[0].channel);
+
+                ledc_set_duty(ledc_channel[1].speed_mode, ledc_channel[1].channel, 0);
+                ledc_update_duty(ledc_channel[1].speed_mode, ledc_channel[1].channel);
+
+                ledc_set_duty(ledc_channel[2].speed_mode, ledc_channel[2].channel, LEDC_DUTY);
+                ledc_update_duty(ledc_channel[2].speed_mode, ledc_channel[2].channel);
             }
         }
     }
@@ -394,6 +589,7 @@ static void button_handler_task(void *arg)
                     else if (grips_b_state < 6){
                         grips_b_state++;                    
                     }
+                    // nvs_set_i16(my_handle, "back_b_state", back_b_state);
                     ESP_LOGI(TAG, "button_grips mode[%d]", (int)grips_b_state); 
                 }
                 else if(press == false && long_press == true){
@@ -415,44 +611,8 @@ static void button_handler_task(void *arg)
 
 
 
-
-
-
-
 void app_main(void)
 {
-   // Initialize NVS
-    esp_err_t err = nvs_flash_init();
-    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        // NVS partition was truncated and needs to be erased
-        // Retry nvs_flash_init
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        err = nvs_flash_init();
-    }
-    ESP_ERROR_CHECK( err );
-
-    // Open memory
-    nvs_handle_t my_handle;
-    err = nvs_open("storage", NVS_READWRITE, &my_handle);
-
-    // Read
-    int32_t restart_counter = 0; // value will default to 0, if not set yet in NVS
-    err = nvs_get_i32(my_handle, "restart_counter", &restart_counter);
- 
-
-    // Write
-    restart_counter++;
-    err = nvs_set_i32(my_handle, "restart_counter", restart_counter);
-
-    // Commit written value.
-    err = nvs_commit(my_handle);
-
-    // Close
-    nvs_close(my_handle);
-    // printf(restart_counter);
-    ESP_LOGI(TAG, "Restart counter %d ", restart_counter);
-
-
     /*< Initialize Touch Element library */
     touch_elem_global_config_t element_global_config = TOUCH_ELEM_GLOBAL_DEFAULT_CONFIG();
     ESP_ERROR_CHECK(touch_element_install(&element_global_config));
@@ -489,6 +649,8 @@ void app_main(void)
         ESP_ERROR_CHECK(touch_element_waterproof_add(button_handle[i]));
 #endif
     }
+
+    xTaskCreate(dht22, "dht22", 4 * configMINIMAL_STACK_SIZE, NULL, 5, NULL);
     xTaskCreate(&task, "task", 4 * configMINIMAL_STACK_SIZE , NULL, 5, NULL);
     
     ESP_LOGI(TAG, "Touch buttons create");
@@ -500,45 +662,159 @@ void app_main(void)
 }
 
 
-/*
-// xTaskCreatePinnedToCore(task, "task", configMINIMAL_STACK_SIZE * 3, NULL, 5, NULL, 0); //configMINIMAL_STACK_SIZE   APP_CPU_NUM
-// xTaskCreate(&mode_select, "mode_select", 4* 1024, NULL, 4, NULL); 
 
-// TaskHandle_t xMode_auto = NULL;
-// TaskHandle_t xMode_manual = NULL;
-// TaskHandle_t xMode_dewpoint = NULL;
-// void mode_select(void){
+// Demo ESP LittleFS Example
 
-//     while(1)
-//     { 
-//         mode_states[0] = &mode_b_state; 
-//         for(uint8_t i = 0; i < 2; i++ ){
-//             int x = *mode_states[i];  
-//             ESP_LOGI(TAG, "mode_select_b_state == %d", x); 
-//             ESP_LOGI(TAG, "mode button [%d]", (int)mode_b_state);  
-//             // vTaskDelay(pdMS_TO_TICKS(500));
+//    This example code is in the Public Domain (or CC0 licensed, at your option.)
 
-//             // if(x == 0){
+//    Unless required by applicable law or agreed to in writing, this
+//    software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+//    CONDITIONS OF ANY KIND, either express or implied.
 
-//             // // vTaskResume(mode_auto);
-//             // // vTaskSuspend(mode_manual);
-//             // // vTaskSuspend(mode_dewpoint);
+// #include <stdio.h>
+// #include "sdkconfig.h"
+// #include "freertos/FreeRTOS.h"
+// #include "freertos/task.h"
+// #include "esp_system.h"
+// #include "esp_spi_flash.h"
+// #include "esp_err.h"
+// #include "esp_log.h"
 
-//             // }
-//             // else if(x == 1){
-//             //     // vTaskSuspend(mode_auto);
-//             //     // vTaskResume(mode_manual);
-//             //     // vTaskSuspend(mode_dewpoint);
+// #include "esp_littlefs.h"
 
-//             // } 
-//             // else if(x == 2){
-//             //     // vTaskSuspend(mode_auto);
-//             //     // vTaskSuspend(mode_manual);
-//             //     // vTaskResume(mode_dewpoint);
-//             // }
+// static const char *TAG = "demo_esp_littlefs";
+
+// void app_main(void)
+// {
+//         printf("Demo LittleFs implementation by esp_littlefs!\n");
+//         printf("   https://github.com/joltwallet/esp_littlefs\n");
+
+//         /* Print chip information */
+//         esp_chip_info_t chip_info;
+//         esp_chip_info(&chip_info);
+//         printf("This is %s chip with %d CPU cores, WiFi%s%s, ",
+//                CONFIG_IDF_TARGET,
+//                chip_info.cores,
+//                (chip_info.features & CHIP_FEATURE_BT) ? "/BT" : "",
+//                (chip_info.features & CHIP_FEATURE_BLE) ? "/BLE" : "");
+
+//         printf("silicon revision %d, ", chip_info.revision);
+
+//         printf("%dMB %s flash\n", spi_flash_get_chip_size() / (1024 * 1024),
+//                (chip_info.features & CHIP_FEATURE_EMB_FLASH) ? "embedded" : "external");
+
+//         printf("Free heap: %d\n", esp_get_free_heap_size());
+
+//         printf("Now we are starting the LittleFs Demo ...\n");
+
+//         ESP_LOGI(TAG, "Initializing LittelFS");
+
+//         esp_vfs_littlefs_conf_t conf = {
+//             .base_path = "/littlefs",
+//             .partition_label = "littlefs",
+//             .format_if_mount_failed = true,
+//             .dont_mount = false,
+//         };
+
+//         // Use settings defined above to initialize and mount LittleFS filesystem.
+//         // Note: esp_vfs_littlefs_register is an all-in-one convenience function.
+//         esp_err_t ret = esp_vfs_littlefs_register(&conf);
+
+//         if (ret != ESP_OK)
+//         {
+//                 if (ret == ESP_FAIL)
+//                 {
+//                         ESP_LOGE(TAG, "Failed to mount or format filesystem");
+//                 }
+//                 else if (ret == ESP_ERR_NOT_FOUND)
+//                 {
+//                         ESP_LOGE(TAG, "Failed to find LittleFS partition");
+//                 }
+//                 else
+//                 {
+//                         ESP_LOGE(TAG, "Failed to initialize LittleFS (%s)", esp_err_to_name(ret));
+//                 }
+//                 return;
 //         }
 
-//     }
+//         size_t total = 0, used = 0;
+//         ret = esp_littlefs_info(conf.partition_label, &total, &used);
+//         if (ret != ESP_OK)
+//         {
+//                 ESP_LOGE(TAG, "Failed to get LittleFS partition information (%s)", esp_err_to_name(ret));
+//         }
+//         else
+//         {
+//                 ESP_LOGI(TAG, "Partition size: total: %d, used: %d", total, used);
+//         }
+
+//         // Use POSIX and C standard library functions to work with files.
+//         // First create a file.
+//         ESP_LOGI(TAG, "Opening file");
+//         FILE *f = fopen("/littlefs/hello.txt", "w");
+//         if (f == NULL)
+//         {
+//                 ESP_LOGE(TAG, "Failed to open file for writing");
+//                 return;
+//         }
+//         fprintf(f, "LittleFS Rocks!\n");
+//         fclose(f);
+//         ESP_LOGI(TAG, "File written");
+
+//         // Check if destination file exists before renaming
+//         struct stat st;
+//         if (stat("/littlefs/foo.txt", &st) == 0)
+//         {
+//                 // Delete it if it exists
+//                 unlink("/littlefs/foo.txt");
+//         }
+
+//         // Rename original file
+//         ESP_LOGI(TAG, "Renaming file");
+//         if (rename("/littlefs/hello.txt", "/littlefs/foo.txt") != 0)
+//         {
+//                 ESP_LOGE(TAG, "Rename failed");
+//                 return;
+//         }
+
+//         // Open renamed file for reading
+//         ESP_LOGI(TAG, "Reading file");
+//         f = fopen("/littlefs/foo.txt", "r");
+//         if (f == NULL)
+//         {
+//                 ESP_LOGE(TAG, "Failed to open file for reading");
+//                 return;
+//         }
+//         char line[64];
+//         fgets(line, sizeof(line), f);
+//         fclose(f);
+//         // strip newline
+//         char *pos = strchr(line, '\n');
+//         if (pos)
+//         {
+//                 *pos = '\0';
+//         }
+//         ESP_LOGI(TAG, "Read from file: '%s'", line);
+
+//         // All done, unmount partition and disable LittleFS
+//         esp_vfs_littlefs_unregister(conf.partition_label);
+//         ESP_LOGI(TAG, "LittleFS unmounted");
 // }
 
-*/
+// // # Special partition table for unit test app
+// // #
+// // # Name,     Type, SubType, Offset,   Size, Flags
+// // # Note: if you change the phy_init or app partition offset, make sure to change the offset in Kconfig.projbuild
+// // nvs,        data, nvs,     0x9000,  0x4000
+// // otadata,    data, ota,     0xd000,  0x2000
+// // phy_init,   data, phy,     0xf000,  0x1000
+// // factory,    0,    0,       0x10000, 2M
+// // # these OTA partitions are used for tests, but can't fit real OTA apps in them
+// // # (done this way so tests can run in 2MB of flash.)
+// // ota_0,      0,    ota_0,   ,        64K
+// // ota_1,      0,    ota_1,   ,        64K
+// // # flash_test partition used for SPI flash tests, WL FAT tests, and SPIFFS tests
+// // fat_store, data, fat,     ,        528K
+// // spiffs_store,  data, spiffs,    ,        512K
+// // flash_test,  data, spiffs,    ,        512K 
+// */

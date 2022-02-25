@@ -5,5 +5,8 @@
     "interface/ftdi/esp32_devkitj_v1.cfg",
     "target/esp32s2.cfg"
   ],
-  "idf.port": "/dev/ttyACM0"
+  "idf.port": "/dev/ttyACM0",
+  "files.associations": {
+    "*.inc": "c"
+  }
 }

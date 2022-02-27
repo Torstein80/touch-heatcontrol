@@ -160,7 +160,7 @@ bool release = false;       // for button logic
 
 
 
-#define button_mode_button 2    // #of modes
+#define button_mode_button 2    // #of modes (0,1,2)
 int mode_b_state= 0;            // Current button state
 
 #define button_on_off 1
@@ -179,13 +179,27 @@ int pass_b_state = 0;
 #define button_backrest 5
 uint16_t back_b_state = 0;
 
-int *power_levels[4];   // array for current power levels, input may come from different modes/user input
-int pl_0;               // input for power level @ array index 0
-int pl_1;               // input for power level @ array index 1
-int pl_2;               // input for power level @ array index 2
-int pl_3;               // input for power level @ array index 3
+int *LED_levels[4];   // array with current power levels used for LED array, input may come from different modes/user input
 
-// nvs_handle_t my_handle;
+uint32_t power_levels[5]={  // Set duty to e.g. 50%: ((2 ** 13) - 1) * 50% = 4095. This controls the PWM duty cycle for the 5 Mosfets
+//  0%, 20%,  40%,  60%,  80%, 100%    
+    0, 1638, 3276, 4914, 6552, 8190
+};
+
+uint32_t mode_states[3][3]={ // LEDS_DUTY controls the mode LEDs light intensity
+    {LEDC_DUTY, 0, 0},
+    {0, LEDC_DUTY, 0},
+    {0, 0, LEDC_DUTY}
+};
+// const static size_t mode_states_size = sizeof(mode_states);
+
+
+int pl_0;               // input for power level backrest       @ array index 0
+int pl_1;               // input for power level passenger seat @ array index 1
+int pl_2;               // input for power level driver seat    @ array index 2
+int pl_3;               // input for power level grips          @ array index 3
+int pl_4;               // input for power level thumb throttle
+
 
 void dht22(void *pvParameters)
 {
@@ -239,8 +253,9 @@ void task(void *pvParameter)
        .digits = 0,
        .mirrored = false
     };
-    ESP_ERROR_CHECK(max7219_init_desc(&dev, HOST, PIN_NUM_CS));
-    ESP_ERROR_CHECK(max7219_init(&dev));
+    ESP_ERROR_CHECK(max7219_init_desc(&dev, HOST, PIN_NUM_CS)); //Initialize device descriptor.
+    ESP_ERROR_CHECK(max7219_init(&dev)); //initialize display
+    ESP_ERROR_CHECK(max7219_clear(&dev)); //clear display
     size_t offs = 0;
 
     while (1)
@@ -271,18 +286,25 @@ void mode_auto(void *pvParameter){
 void mode_manual(void *pvParameter){
     // Manual mode:
     // -All settings are set manual, settings are remembered between power cycles
+    // teste om grips long press er true og erstatte [3] med tommel varme mens den er trykket + 3 sekunder, deretter tilbake igjen
+    int grips_b_long_temp = 0;
     while(1){
-        
-        if(pl_0 != back_b_state){
+
+        if (long_press == true){ 
             pl_0 = back_b_state;
-            // pl_0 = nvs_get_i16(my_handle, "back_b_state", back_b_state);        
-            ESP_LOGI(TAG02, "Test of counter[%d] ", back_b_state); 
-            }
-    
-        
-        pl_1 = pass_b_state;
-        pl_2 = driver_b_state;
-        pl_3 = grips_b_state;
+            pl_1 = pass_b_state;
+            pl_2 = driver_b_state;
+            pl_3 = grips_b_long; 
+            vTaskDelay(pdMS_TO_TICKS(2000)); 
+            long_press = false;                                                 
+        } 
+        else if(long_press == false) {
+            pl_0 = back_b_state;
+            pl_1 = pass_b_state;
+            pl_2 = driver_b_state;
+            pl_3 = grips_b_state;
+        } 
+        vTaskDelay(pdMS_TO_TICKS(20)); 
     }
 }
 
@@ -403,104 +425,67 @@ void buttons_modes(void *pvParameter)
     vTaskSuspend(xMode_manual);
     xTaskCreate(&mode_dewpoint, "mode_dewpoint", 4* 1024, NULL, 4, &xMode_dewpoint);
     vTaskSuspend(xMode_dewpoint);
-
-    // gpio_pad_select_gpio(led_auto);
-    // gpio_set_direction(led_auto, GPIO_MODE_OUTPUT);
-
-    // gpio_pad_select_gpio(led_manual);
-    // gpio_set_direction(led_manual, GPIO_MODE_OUTPUT);
-
-    // gpio_pad_select_gpio(led_dewpoint);
-    // gpio_set_direction(led_dewpoint, GPIO_MODE_OUTPUT);
+    
 
     while(1){ 
-        // Write current power level to power_levels array.
-            power_levels[0] = &pl_0;
-            power_levels[1] = &pl_1;
-            power_levels[2] = &pl_2;
-            power_levels[3] = &pl_3;
-
-            // power_levels[0] = &back_b_state;
-            // power_levels[1] = &pass_b_state;
-            // power_levels[2] = &driver_b_state;
-            // power_levels[3] = &grips_b_state;           
+        // write power levels to LEDs
+            LED_levels[0] = &pl_0;
+            LED_levels[1] = &pl_1;
+            LED_levels[2] = &pl_2;
+            LED_levels[3] = &pl_3;
+            
+          
         // Write button state to led matrix
-        for(uint8_t i = 0; i < 4; i++ ){
-            // int x = *power_levels[i];  
-            symbols[i] = led_states[*power_levels[i]];
+        for(uint8_t i = 0; i < 4; i++ ){ 
+            symbols[i] = led_states[*LED_levels[i]];
         } 
-
         if(on_off_b_state == 0){                // OFF state
+            
             vTaskSuspend(xMode_auto);
             vTaskSuspend(xMode_manual);
             vTaskSuspend(xMode_dewpoint);
-            ledc_set_duty(ledc_channel[0].speed_mode, ledc_channel[0].channel, 0);
-            ledc_update_duty(ledc_channel[0].speed_mode, ledc_channel[0].channel);
 
-            ledc_set_duty(ledc_channel[1].speed_mode, ledc_channel[1].channel, 0);
-            ledc_update_duty(ledc_channel[1].speed_mode, ledc_channel[1].channel);
-
-            ledc_set_duty(ledc_channel[2].speed_mode, ledc_channel[2].channel, 0);
-            ledc_update_duty(ledc_channel[2].speed_mode, ledc_channel[2].channel);
             pl_0 = 0;
             pl_1 = 0;
             pl_2 = 0;
             pl_3 = 0;
+            
+
+            for (int i=0; i<3;i++){
+                ledc_set_duty(ledc_channel[i].speed_mode, ledc_channel[i].channel, 0);
+                ledc_update_duty(ledc_channel[i].speed_mode, ledc_channel[i].channel);
+            }
             // back_b_state = 0;
             // pass_b_state = 0;
             // driver_b_state = 0;
             // grips_b_state = 0;
             // grips_b_long = 0;
+
         }
         else if (on_off_b_state == 1){          // ON state
-
+            for(int i=0; i<3; i++){  
+                ledc_set_duty(ledc_channel[i].speed_mode, ledc_channel[i].channel, mode_states[mode_b_state][i]);
+                ledc_update_duty(ledc_channel[i].speed_mode, ledc_channel[i].channel);   
+            }
+            // set duty cycle for PWM outputs. 0-5 = 0-100%
+            for(int i=3; i<8; i++){  
+                ledc_set_duty(ledc_channel[i].speed_mode, ledc_channel[i].channel, power_levels[i]);
+                ledc_update_duty(ledc_channel[i].speed_mode, ledc_channel[i].channel);   
+            }
             if(mode_b_state == 0){              // Auto mode
                 vTaskResume(xMode_auto);
                 vTaskSuspend(xMode_manual);
                 vTaskSuspend(xMode_dewpoint);
-                ledc_set_duty(ledc_channel[0].speed_mode, ledc_channel[0].channel, LEDC_DUTY);
-                ledc_update_duty(ledc_channel[0].speed_mode, ledc_channel[0].channel);
-
-                ledc_set_duty(ledc_channel[1].speed_mode, ledc_channel[1].channel, 0);
-                ledc_update_duty(ledc_channel[1].speed_mode, ledc_channel[1].channel);
-
-                ledc_set_duty(ledc_channel[2].speed_mode, ledc_channel[2].channel, 0);
-                ledc_update_duty(ledc_channel[2].speed_mode, ledc_channel[2].channel);
-                // gpio_set_level(led_auto, 0);
-                // gpio_set_level(led_manual, 0); 
-                // gpio_set_level(led_dewpoint, 0); 
             }
             else if(mode_b_state == 1){         // Manual mode
                 vTaskSuspend(xMode_auto);
                 vTaskResume(xMode_manual);
                 vTaskSuspend(xMode_dewpoint);
-                // gpio_set_level(led_auto, 0);
-                // gpio_set_level(led_manual, 1); 
-                // gpio_set_level(led_dewpoint, 0); 
-                ledc_set_duty(ledc_channel[0].speed_mode, ledc_channel[0].channel, 0);
-                ledc_update_duty(ledc_channel[0].speed_mode, ledc_channel[0].channel);
-
-                ledc_set_duty(ledc_channel[1].speed_mode, ledc_channel[1].channel, LEDC_DUTY);
-                ledc_update_duty(ledc_channel[1].speed_mode, ledc_channel[1].channel);
-
-                ledc_set_duty(ledc_channel[2].speed_mode, ledc_channel[2].channel, 0);
-                ledc_update_duty(ledc_channel[2].speed_mode, ledc_channel[2].channel);
             } 
             else if(mode_b_state == 2){         // Dewpoint mode
                 vTaskSuspend(xMode_auto);
                 vTaskSuspend(xMode_manual);
                 vTaskResume(xMode_dewpoint);
-                // gpio_set_level(led_auto, 0);
-                // gpio_set_level(led_manual, 0); 
-                // gpio_set_level(led_dewpoint, 1); 
-                ledc_set_duty(ledc_channel[0].speed_mode, ledc_channel[0].channel, 0);
-                ledc_update_duty(ledc_channel[0].speed_mode, ledc_channel[0].channel);
-
-                ledc_set_duty(ledc_channel[1].speed_mode, ledc_channel[1].channel, 0);
-                ledc_update_duty(ledc_channel[1].speed_mode, ledc_channel[1].channel);
-
-                ledc_set_duty(ledc_channel[2].speed_mode, ledc_channel[2].channel, LEDC_DUTY);
-                ledc_update_duty(ledc_channel[2].speed_mode, ledc_channel[2].channel);
             }
         }
     }
@@ -578,7 +563,8 @@ static void button_handler_task(void *arg)
                     }
                 else if (mode_b_state< 3){
                     mode_b_state++;                    
-                    }                   
+                    }
+                    ESP_LOGI(TAG, "mode_button mode[%d]", (int)mode_b_state);                    
             }
             else if((uint32_t)element_message.arg == 11){
                 if(press == true && long_press == false){

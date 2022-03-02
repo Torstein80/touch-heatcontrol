@@ -308,6 +308,7 @@ void mode_manual(void *pvParameter){
             pl_1 = pass_b_state;
             pl_2 = driver_b_state;
             pl_3 = grips_b_state;
+            pl_4 = grips_b_long;
         } 
         vTaskDelay(pdMS_TO_TICKS(20)); 
     }

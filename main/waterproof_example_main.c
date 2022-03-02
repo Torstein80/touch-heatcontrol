@@ -179,26 +179,30 @@ int pass_b_state = 0;
 #define button_backrest 5
 uint16_t back_b_state = 0;
 
-int *LED_levels[4];   // array with current power levels used for LED array, input may come from different modes/user input
-
-uint32_t power_levels[5]={  // Set duty to e.g. 50%: ((2 ** 13) - 1) * 50% = 4095. This controls the PWM duty cycle for the 5 Mosfets
-//  0%, 20%,  40%,  60%,  80%, 100%    
-    0, 1638, 3276, 4914, 6552, 8190
-};
-
-uint32_t mode_states[3][3]={ // LEDS_DUTY controls the mode LEDs light intensity
-    {LEDC_DUTY, 0, 0},
-    {0, LEDC_DUTY, 0},
-    {0, 0, LEDC_DUTY}
-};
-// const static size_t mode_states_size = sizeof(mode_states);
-
-
 int pl_0;               // input for power level backrest       @ array index 0
 int pl_1;               // input for power level passenger seat @ array index 1
 int pl_2;               // input for power level driver seat    @ array index 2
 int pl_3;               // input for power level grips          @ array index 3
 int pl_4;               // input for power level thumb throttle
+
+int *LED_levels[4];   // array with current power levels used for LED array, input may come from different modes/user input
+
+// LEDc channels 3-7 use power_states as input for the duty cycle
+int power_states[5]; // array with current power levels for the PWM outputs.
+
+int duty_cycles[6]={  // Set duty to e.g. 50%: ((2 ** 13) - 1) * 50% = 4095. This controls the PWM duty cycle for the 5 Mosfets
+//  0%, 20%,  40%,  60%,  80%, 100%    
+    0, 1638, 3276, 4914, 6552, 8190
+};
+
+
+// LEDc channels 0-2 use mode_states as input for the duty cycle
+int mode_states[3][3]={ // LEDS_DUTY controls the mode LEDs light intensity
+    {LEDC_DUTY, 0, 0},
+    {0, LEDC_DUTY, 0},
+    {0, 0, LEDC_DUTY}
+};
+// const static size_t mode_states_size = sizeof(mode_states);
 
 
 void dht22(void *pvParameters)
@@ -294,7 +298,8 @@ void mode_manual(void *pvParameter){
             pl_0 = back_b_state;
             pl_1 = pass_b_state;
             pl_2 = driver_b_state;
-            pl_3 = grips_b_long; 
+            pl_3 = grips_b_long; // temporarely display power level for thumb throttle, this will also change PWM for grips, but only for 2 seconds, hence it is ok.
+            pl_4 = grips_b_long;
             vTaskDelay(pdMS_TO_TICKS(2000)); 
             long_press = false;                                                 
         } 
@@ -428,11 +433,17 @@ void buttons_modes(void *pvParameter)
     
 
     while(1){ 
-        // write power levels to LEDs
+        // write power levels to LED levels aarray
             LED_levels[0] = &pl_0;
             LED_levels[1] = &pl_1;
             LED_levels[2] = &pl_2;
             LED_levels[3] = &pl_3;
+        // write power levels for the PWM outputs
+            power_states[0] = &pl_0;
+            power_states[1] = &pl_1;
+            power_states[2] = &pl_2;
+            power_states[3] = &pl_3;
+            power_states[4] = &pl_4;
             
           
         // Write button state to led matrix
@@ -468,9 +479,11 @@ void buttons_modes(void *pvParameter)
                 ledc_update_duty(ledc_channel[i].speed_mode, ledc_channel[i].channel);   
             }
             // set duty cycle for PWM outputs. 0-5 = 0-100%
-            for(int i=3; i<8; i++){  
-                ledc_set_duty(ledc_channel[i].speed_mode, ledc_channel[i].channel, power_levels[i]);
-                ledc_update_duty(ledc_channel[i].speed_mode, ledc_channel[i].channel);   
+            for(int i=3; i<8; i++){
+                for(int j=0; j<6;j++){
+                    ledc_set_duty(ledc_channel[i].speed_mode, ledc_channel[i].channel, duty_cycles[power_states[j]]);
+                    ledc_update_duty(ledc_channel[i].speed_mode, ledc_channel[i].channel);  
+                }
             }
             if(mode_b_state == 0){              // Auto mode
                 vTaskResume(xMode_auto);

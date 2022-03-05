@@ -168,6 +168,8 @@ int on_off_b_state = 0;
 
 #define button_grips 5
 int grips_b_state = 0;
+
+#define button_grips_thumb 5
 int grips_b_long = 0;
 
 #define button_driver_seat 5
@@ -347,26 +349,26 @@ void mode_manual(void *pvParameter){
     // Manual mode:
     // -All settings are set manual, settings are remembered between power cycles
     // teste om grips long press er true og erstatte [3] med tommel varme mens den er trykket + 3 sekunder, deretter tilbake igjen
-    // int grips_b_long_temp = 0;
     while(1){
 
-        if (long_press == true){ 
-            pl_0 = back_b_state;
-            pl_1 = pass_b_state;
-            pl_2 = driver_b_state;
-            pl_3 = grips_b_long; // temporarely display power level for thumb throttle, this will also change PWM for grips, but only for 2 seconds, hence it is ok.
-            pl_4 = grips_b_long;
-            vTaskDelay(pdMS_TO_TICKS(2000)); 
-            long_press = false;                                                 
-        } 
-        else if(long_press == false) {
+        if(long_press == false) {
+            // for(int i = 0; i<1;i++){
+            //         pl_3 = grips_b_long; // temporarely display power level for thumb throttle, this will also change PWM for grips, but only for 2 seconds, hence it is ok.
+            //         vTaskDelay(pdMS_TO_TICKS(2000)); 
+            //     }
             pl_0 = back_b_state;
             pl_1 = pass_b_state;
             pl_2 = driver_b_state;
             pl_3 = grips_b_state;
-            pl_4 = grips_b_long;
-        } 
-        vTaskDelay(pdMS_TO_TICKS(20)); 
+            pl_4 = grips_b_state;   //grips_b_long;
+            vTaskDelay(pdMS_TO_TICKS(20)); 
+        }        
+
+        // else if (long_press == true){ 
+        //     pl_3 = grips_b_long; // temporarely display power level for thumb throttle, this will also change PWM for grips, but only for 2 seconds, hence it is ok.
+        //     // pl_4 = grips_b_lon
+        //     vTaskDelay(pdMS_TO_TICKS(20));                                       
+        // }
     }
 }
 
@@ -377,10 +379,23 @@ void mode_dewpoint(void *pvParameter){
     // -input: Relative humidity
     // -- Relative humidity > 90% set 100% power level for 30 minutes, then off
     while(1){
-        pl_0 = 1;
-        pl_1 = 2;
-        pl_2 = 3;
-        pl_3 = 4;
+        if(humidity/10 >= 90){
+            pl_0 = 5;
+            pl_1 = 5;
+            pl_2 = 5;
+            pl_3 = 5;
+            pl_4 = 5;
+            vTaskDelay(pdMS_TO_TICKS(20)); 
+        }
+        else if(humidity/10 < 90){
+            pl_0 = 0;
+            pl_1 = 0;
+            pl_2 = 0;
+            pl_3 = 0;
+            pl_4 = 0;
+            vTaskDelay(pdMS_TO_TICKS(20)); 
+        }
+        vTaskDelay(pdMS_TO_TICKS(2000)); 
     }
 }
 
@@ -667,8 +682,8 @@ static void button_handler_task(void *arg)
                     ESP_LOGI(TAG, "button_grips mode[%d]", (int)grips_b_state); 
                 }
                 else if(press == false && long_press == true){
-                    ESP_LOGI(TAG, "button_grips is pressed");                
-                    if(grips_b_long >= button_grips){
+                    ESP_LOGI(TAG, "button_grips_thumb is pressed");                
+                    if(grips_b_long >= button_grips_thumb){
                         grips_b_long = 0;
                     }
                     else if (grips_b_long < 6){
@@ -677,6 +692,7 @@ static void button_handler_task(void *arg)
                     ESP_LOGI(TAG, "button_grips Thumb longpress[%d]", (int)grips_b_long); 
                 }
             }
+        long_press = false; 
         }
     }
 }

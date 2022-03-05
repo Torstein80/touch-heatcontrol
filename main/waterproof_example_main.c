@@ -179,18 +179,18 @@ int pass_b_state = 0;
 #define button_backrest 5
 uint16_t back_b_state = 0;
 
-int pl_0;               // input for power level backrest       @ array index 0
-int pl_1;               // input for power level passenger seat @ array index 1
-int pl_2;               // input for power level driver seat    @ array index 2
-int pl_3;               // input for power level grips          @ array index 3
-int pl_4;               // input for power level thumb throttle
+int pl_0 = 0;               // input for power level backrest       @ array index 0
+int pl_1 = 0;               // input for power level passenger seat @ array index 1
+int pl_2 = 0;               // input for power level driver seat    @ array index 2
+int pl_3 = 0;               // input for power level grips          @ array index 3
+int pl_4 = 0;               // input for power level thumb throttle
 
 int *LED_levels[4];   // array with current power levels used for LED array, input may come from different modes/user input
 
 // LEDc channels 3-7 use power_states as input for the duty cycle
-int power_states[5]; // array with current power levels for the PWM outputs.
+int power_states[8]; // array with current power levels for the PWM outputs.
 
-int duty_cycles[6]={  // Set duty to e.g. 50%: ((2 ** 13) - 1) * 50% = 4095. This controls the PWM duty cycle for the 5 Mosfets
+uint32_t duty_cycles[6]={  // Set duty to e.g. 50%: ((2 ** 13) - 1) * 50% = 4095. This controls the PWM duty cycle for the 5 Mosfets
 //  0%, 20%,  40%,  60%,  80%, 100%    
     0, 1638, 3276, 4914, 6552, 8190
 };
@@ -205,10 +205,12 @@ int mode_states[3][3]={ // LEDS_DUTY controls the mode LEDs light intensity
 // const static size_t mode_states_size = sizeof(mode_states);
 
 
+
+int16_t temperature = 0;
+int16_t humidity = 0;
 void dht22(void *pvParameters)
 {
-    int16_t temperature = 0;
-    int16_t humidity = 0;
+
 
     // DHT sensors that come mounted on a PCB generally have
     // pull-up resistors on the data pin.  It is recommended
@@ -231,13 +233,13 @@ void dht22(void *pvParameters)
         // If you read the sensor data too often, it will heat up
         // http://www.kandrsmith.org/RJS/Misc/Hygrometers/dht_sht_how_fast.html
         
-        vTaskDelay(pdMS_TO_TICKS(2000));
+        vTaskDelay(pdMS_TO_TICKS(5000));
     }
 }
 
-void task(void *pvParameter)
+void max7219(void *pvParameter)
 {
-    esp_err_t res;
+    // esp_err_t res;
     
     // Configure SPI bus
     spi_bus_config_t cfg = {
@@ -281,8 +283,62 @@ void mode_auto(void *pvParameter){
     // - inputs: Temp and Relative humidity.
     // -- Temp array give input to power level
     // -- Relative humidity > 90% set 100% power level for 30 minutes, then off or whatever temp array demands
-    while(1){
+    int32_t temp_auto_array[6]={
+        29,   //    > 15 C
+        28,   // 10 < 15 C
+        27,   //  8 < 10 C
+        26,   //  5 <  8 C
+        25,   //  0 <  5 C
+        24   //    <  0 C
+    };
 
+    // ESP_LOGI(TAG, "Auto mode active"); 
+
+    int32_t temp[6];
+    int32_t min = 0;
+    int32_t location = 0;
+
+    while(1){ 
+        for(int i = 0; i< 6; i++){
+            if( temperature/10 < temp_auto_array[i]){   // compare measured temp with temp_auto_array  
+                temp[i] = temp_auto_array[i];
+            }           // temporary array with only values lower than measured temp.  
+            else if( temperature/10 > temp_auto_array[i]){
+                    temp[i]=99;
+            }
+        }   
+        for(int i=0; i<6; i++){
+            if (temp[i] < temp[location]){              // fin min value in temp array
+                location = i;
+            }
+        // ESP_LOGI(TAG, "Auto mode temp array values: [%d]", temp[i]); 
+        }
+    // map temps to PL_x value
+
+        if(humidity/10 >= 90){
+            pl_0 = 5;
+            pl_1 = 5;
+            pl_2 = 5;
+            pl_3 = 5;
+            pl_4 = 5;
+        }
+        else if(min == 99){
+            pl_0 = 0;
+            pl_1 = 0;
+            pl_2 = 0;
+            pl_3 = 0;
+            pl_4 = 0;
+        }
+        else{
+            pl_0 = location;
+            pl_1 = location;
+            pl_2 = location;
+            pl_3 = location;
+            pl_4 = location;
+        }
+        vTaskDelay(pdMS_TO_TICKS(2000)); 
+        // ESP_LOGI(TAG, "Auto mode temp array MIN value: [%d]", temp[location]); 
+        // ESP_LOGI(TAG, "Auto mode temp array MIN array location: [%d]", location); 
     }
 }
 
@@ -291,7 +347,7 @@ void mode_manual(void *pvParameter){
     // Manual mode:
     // -All settings are set manual, settings are remembered between power cycles
     // teste om grips long press er true og erstatte [3] med tommel varme mens den er trykket + 3 sekunder, deretter tilbake igjen
-    int grips_b_long_temp = 0;
+    // int grips_b_long_temp = 0;
     while(1){
 
         if (long_press == true){ 
@@ -425,6 +481,7 @@ void buttons_modes(void *pvParameter)
     TaskHandle_t xMode_manual;
     TaskHandle_t xMode_dewpoint;
 
+    xTaskCreate(max7219, "max7219", 4 * configMINIMAL_STACK_SIZE, NULL, 4, NULL);
     xTaskCreate(&mode_auto, "mode_auto", 4* 1024, NULL, 4, &xMode_auto);
     vTaskSuspend(xMode_auto);
     xTaskCreate(&mode_manual, "mode_manual", 4* 1024, NULL, 4, &xMode_manual);
@@ -432,6 +489,7 @@ void buttons_modes(void *pvParameter)
     xTaskCreate(&mode_dewpoint, "mode_dewpoint", 4* 1024, NULL, 4, &xMode_dewpoint);
     vTaskSuspend(xMode_dewpoint);
     
+    int x[8]; // array to map power levels to duty cycles for PWM outputs
 
     while(1){ 
         // write power levels to LED levels aarray
@@ -440,17 +498,31 @@ void buttons_modes(void *pvParameter)
             LED_levels[2] = &pl_2;
             LED_levels[3] = &pl_3;
         // write power levels for the PWM outputs
-            power_states[0] = &pl_0;
-            power_states[1] = &pl_1;
-            power_states[2] = &pl_2;
-            power_states[3] = &pl_3;
-            power_states[4] = &pl_4;
+            power_states[0] = 0;    //not in use
+            power_states[1] = 0;    //not in use
+            power_states[2] = 0;    //not in use
+            power_states[3] = pl_4;
+            power_states[4] = pl_3;
+            power_states[5] = pl_2;
+            power_states[6] = pl_1;
+            power_states[7] = pl_0;
             
           
         // Write button state to led matrix
         for(uint8_t i = 0; i < 4; i++ ){ 
             symbols[i] = led_states[*LED_levels[i]];
         } 
+
+        for(int i=3; i<8;i++){  
+            x[i]= duty_cycles[power_states[i]]; 
+
+            // ESP_LOGI(TAG, "X [%d] Press", x[i]); 
+            // ESP_LOGI(TAG, "duty cycle[%d] Press", duty_cycles[i]); 
+            // ESP_LOGI(TAG, "power states[%d] Press", power_states[i]); 
+            // vTaskDelay(pdMS_TO_TICKS(2000)); 
+
+        } 
+
         if(on_off_b_state == 0){                // OFF state
             
             vTaskSuspend(xMode_auto);
@@ -461,31 +533,32 @@ void buttons_modes(void *pvParameter)
             pl_1 = 0;
             pl_2 = 0;
             pl_3 = 0;
+            pl_4 = 0;
             
 
             for (int i=0; i<3;i++){
                 ledc_set_duty(ledc_channel[i].speed_mode, ledc_channel[i].channel, 0);
                 ledc_update_duty(ledc_channel[i].speed_mode, ledc_channel[i].channel);
             }
-            // back_b_state = 0;
-            // pass_b_state = 0;
-            // driver_b_state = 0;
-            // grips_b_state = 0;
-            // grips_b_long = 0;
+                // set duty cycle for PWM outputs. 0-5 = 0-100%
+            for(int i=3; i<8; i++){  
+                    ledc_set_duty(ledc_channel[i].speed_mode, ledc_channel[i].channel, x[i]);
+                    ledc_update_duty(ledc_channel[i].speed_mode, ledc_channel[i].channel);  
+            }
 
         }
         else if (on_off_b_state == 1){          // ON state
+            // mode state leds output
             for(int i=0; i<3; i++){  
                 ledc_set_duty(ledc_channel[i].speed_mode, ledc_channel[i].channel, mode_states[mode_b_state][i]);
                 ledc_update_duty(ledc_channel[i].speed_mode, ledc_channel[i].channel);   
             }
-            // set duty cycle for PWM outputs. 0-5 = 0-100%
-            for(int i=3; i<8; i++){
-                for(int j=0; j<6;j++){
-                    ledc_set_duty(ledc_channel[i].speed_mode, ledc_channel[i].channel, duty_cycles[power_states[j]]);
+                // set duty cycle for PWM outputs. 0-5 = 0-100%
+            for(int i=3; i<8; i++){  
+                    ledc_set_duty(ledc_channel[i].speed_mode, ledc_channel[i].channel, x[i]);
                     ledc_update_duty(ledc_channel[i].speed_mode, ledc_channel[i].channel);  
-                }
             }
+            
             if(mode_b_state == 0){              // Auto mode
                 vTaskResume(xMode_auto);
                 vTaskSuspend(xMode_manual);
@@ -501,6 +574,7 @@ void buttons_modes(void *pvParameter)
                 vTaskSuspend(xMode_manual);
                 vTaskResume(xMode_dewpoint);
             }
+
         }
     }
 }        
@@ -613,6 +687,10 @@ static void button_handler_task(void *arg)
 
 void app_main(void)
 {
+
+
+
+
     /*< Initialize Touch Element library */
     touch_elem_global_config_t element_global_config = TOUCH_ELEM_GLOBAL_DEFAULT_CONFIG();
     ESP_ERROR_CHECK(touch_element_install(&element_global_config));
@@ -649,172 +727,15 @@ void app_main(void)
         ESP_ERROR_CHECK(touch_element_waterproof_add(button_handle[i]));
 #endif
     }
-
-    xTaskCreate(dht22, "dht22", 4 * configMINIMAL_STACK_SIZE, NULL, 5, NULL);
-    xTaskCreate(&task, "task", 4 * configMINIMAL_STACK_SIZE , NULL, 5, NULL);
     
     ESP_LOGI(TAG, "Touch buttons create");
     /*< Create a monitor task to take Touch Button event */
-    xTaskCreate(&button_handler_task, "button_handler_task", 4 * configMINIMAL_STACK_SIZE, NULL, 4, NULL);
+    xTaskCreate(button_handler_task, "button_handler_task", 4 * 2048, NULL, 5, NULL);
     touch_element_start();
 
-    xTaskCreate(buttons_modes, "buttons_modes", 4 * configMINIMAL_STACK_SIZE, NULL, 4, NULL);
+
+
+    xTaskCreate(dht22, "dht22", 4 * 2048, NULL, 4, NULL); // configMINIMAL_STACK_SIZE
+
+    xTaskCreate(buttons_modes, "buttons_modes", 4 * 2048, NULL, 4, NULL);
 }
-
-
-
-// Demo ESP LittleFS Example
-
-//    This example code is in the Public Domain (or CC0 licensed, at your option.)
-
-//    Unless required by applicable law or agreed to in writing, this
-//    software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
-//    CONDITIONS OF ANY KIND, either express or implied.
-
-// #include <stdio.h>
-// #include "sdkconfig.h"
-// #include "freertos/FreeRTOS.h"
-// #include "freertos/task.h"
-// #include "esp_system.h"
-// #include "esp_spi_flash.h"
-// #include "esp_err.h"
-// #include "esp_log.h"
-
-// #include "esp_littlefs.h"
-
-// static const char *TAG = "demo_esp_littlefs";
-
-// void app_main(void)
-// {
-//         printf("Demo LittleFs implementation by esp_littlefs!\n");
-//         printf("   https://github.com/joltwallet/esp_littlefs\n");
-
-//         /* Print chip information */
-//         esp_chip_info_t chip_info;
-//         esp_chip_info(&chip_info);
-//         printf("This is %s chip with %d CPU cores, WiFi%s%s, ",
-//                CONFIG_IDF_TARGET,
-//                chip_info.cores,
-//                (chip_info.features & CHIP_FEATURE_BT) ? "/BT" : "",
-//                (chip_info.features & CHIP_FEATURE_BLE) ? "/BLE" : "");
-
-//         printf("silicon revision %d, ", chip_info.revision);
-
-//         printf("%dMB %s flash\n", spi_flash_get_chip_size() / (1024 * 1024),
-//                (chip_info.features & CHIP_FEATURE_EMB_FLASH) ? "embedded" : "external");
-
-//         printf("Free heap: %d\n", esp_get_free_heap_size());
-
-//         printf("Now we are starting the LittleFs Demo ...\n");
-
-//         ESP_LOGI(TAG, "Initializing LittelFS");
-
-//         esp_vfs_littlefs_conf_t conf = {
-//             .base_path = "/littlefs",
-//             .partition_label = "littlefs",
-//             .format_if_mount_failed = true,
-//             .dont_mount = false,
-//         };
-
-//         // Use settings defined above to initialize and mount LittleFS filesystem.
-//         // Note: esp_vfs_littlefs_register is an all-in-one convenience function.
-//         esp_err_t ret = esp_vfs_littlefs_register(&conf);
-
-//         if (ret != ESP_OK)
-//         {
-//                 if (ret == ESP_FAIL)
-//                 {
-//                         ESP_LOGE(TAG, "Failed to mount or format filesystem");
-//                 }
-//                 else if (ret == ESP_ERR_NOT_FOUND)
-//                 {
-//                         ESP_LOGE(TAG, "Failed to find LittleFS partition");
-//                 }
-//                 else
-//                 {
-//                         ESP_LOGE(TAG, "Failed to initialize LittleFS (%s)", esp_err_to_name(ret));
-//                 }
-//                 return;
-//         }
-
-//         size_t total = 0, used = 0;
-//         ret = esp_littlefs_info(conf.partition_label, &total, &used);
-//         if (ret != ESP_OK)
-//         {
-//                 ESP_LOGE(TAG, "Failed to get LittleFS partition information (%s)", esp_err_to_name(ret));
-//         }
-//         else
-//         {
-//                 ESP_LOGI(TAG, "Partition size: total: %d, used: %d", total, used);
-//         }
-
-//         // Use POSIX and C standard library functions to work with files.
-//         // First create a file.
-//         ESP_LOGI(TAG, "Opening file");
-//         FILE *f = fopen("/littlefs/hello.txt", "w");
-//         if (f == NULL)
-//         {
-//                 ESP_LOGE(TAG, "Failed to open file for writing");
-//                 return;
-//         }
-//         fprintf(f, "LittleFS Rocks!\n");
-//         fclose(f);
-//         ESP_LOGI(TAG, "File written");
-
-//         // Check if destination file exists before renaming
-//         struct stat st;
-//         if (stat("/littlefs/foo.txt", &st) == 0)
-//         {
-//                 // Delete it if it exists
-//                 unlink("/littlefs/foo.txt");
-//         }
-
-//         // Rename original file
-//         ESP_LOGI(TAG, "Renaming file");
-//         if (rename("/littlefs/hello.txt", "/littlefs/foo.txt") != 0)
-//         {
-//                 ESP_LOGE(TAG, "Rename failed");
-//                 return;
-//         }
-
-//         // Open renamed file for reading
-//         ESP_LOGI(TAG, "Reading file");
-//         f = fopen("/littlefs/foo.txt", "r");
-//         if (f == NULL)
-//         {
-//                 ESP_LOGE(TAG, "Failed to open file for reading");
-//                 return;
-//         }
-//         char line[64];
-//         fgets(line, sizeof(line), f);
-//         fclose(f);
-//         // strip newline
-//         char *pos = strchr(line, '\n');
-//         if (pos)
-//         {
-//                 *pos = '\0';
-//         }
-//         ESP_LOGI(TAG, "Read from file: '%s'", line);
-
-//         // All done, unmount partition and disable LittleFS
-//         esp_vfs_littlefs_unregister(conf.partition_label);
-//         ESP_LOGI(TAG, "LittleFS unmounted");
-// }
-
-// // # Special partition table for unit test app
-// // #
-// // # Name,     Type, SubType, Offset,   Size, Flags
-// // # Note: if you change the phy_init or app partition offset, make sure to change the offset in Kconfig.projbuild
-// // nvs,        data, nvs,     0x9000,  0x4000
-// // otadata,    data, ota,     0xd000,  0x2000
-// // phy_init,   data, phy,     0xf000,  0x1000
-// // factory,    0,    0,       0x10000, 2M
-// // # these OTA partitions are used for tests, but can't fit real OTA apps in them
-// // # (done this way so tests can run in 2MB of flash.)
-// // ota_0,      0,    ota_0,   ,        64K
-// // ota_1,      0,    ota_1,   ,        64K
-// // # flash_test partition used for SPI flash tests, WL FAT tests, and SPIFFS tests
-// // fat_store, data, fat,     ,        528K
-// // spiffs_store,  data, spiffs,    ,        512K
-// // flash_test,  data, spiffs,    ,        512K 
-// */

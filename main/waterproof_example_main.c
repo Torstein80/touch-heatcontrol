@@ -10,7 +10,7 @@ Grip/throttle button:
 -Long press: Thumb power level
 
 Other buttons:
--Set power levels on press
+-Set power levels on release
 
 Auto mode:
 - inputs: Temp and Relative humidity.
@@ -35,12 +35,14 @@ Dewpoint mode:
 #include "max7219.h"
 #include "stdio.h"
 #include "esp_littlefs.h"
-// #include "esp_system.h"
-// #include "nvs_flash.h"
-// #include "nvs.h"
 #include <dht.h>
 #include "driver/ledc.h"
+#include "esp_system.h"
+#include "esp_spi_flash.h"
 #include "esp_err.h"
+#include "esp_littlefs.h"
+#include "nvs_flash.h"
+#include "nvs.h"
 
 
 
@@ -64,7 +66,14 @@ static const gpio_num_t dht_gpio = 38;
 #define PIN_NUM_CLK  3  //max 7219
 #define PIN_NUM_CS   2  //LOAD pin12 on max 7219
 
+TaskHandle_t xMode_auto;
+TaskHandle_t xMode_manual;
+TaskHandle_t xMode_dewpoint;
+TaskHandle_t xNVS_read_write;
+TaskHandle_t xNVS_write;
 
+nvs_handle_t my_handle;
+esp_err_t err;
 
 u_char symbols[] = { // Array for max7219 LED matrix
     0b00000000, // backrest leds
@@ -158,8 +167,6 @@ bool release = false;       // for button logic
 #define LEDC_FADE_TIME    (3000)
 
 
-
-
 #define button_mode_button 2    // #of modes (0,1,2)
 int mode_b_state= 0;            // Current button state
 
@@ -197,7 +204,6 @@ uint32_t duty_cycles[6]={  // Set duty to e.g. 50%: ((2 ** 13) - 1) * 50% = 4095
     0, 1638, 3276, 4914, 6552, 8190
 };
 
-
 // LEDc channels 0-2 use mode_states as input for the duty cycle
 int mode_states[3][3]={ // LEDS_DUTY controls the mode LEDs light intensity
     {LEDC_DUTY, 0, 0},
@@ -206,10 +212,9 @@ int mode_states[3][3]={ // LEDS_DUTY controls the mode LEDs light intensity
 };
 // const static size_t mode_states_size = sizeof(mode_states);
 
-
-
 int16_t temperature = 0;
 int16_t humidity = 0;
+
 void dht22(void *pvParameters)
 {
 
@@ -279,7 +284,6 @@ void max7219(void *pvParameter)
     }
 }
 
-
 void mode_auto(void *pvParameter){
     //Auto mode:
     // - inputs: Temp and Relative humidity.
@@ -344,7 +348,6 @@ void mode_auto(void *pvParameter){
     }
 }
 
-
 void mode_manual(void *pvParameter){
     // Manual mode:
     // -All settings are set manual, settings are remembered between power cycles
@@ -372,7 +375,6 @@ void mode_manual(void *pvParameter){
     }
 }
 
-
 void mode_dewpoint(void *pvParameter){
 
     // Dewpoint mode:
@@ -399,6 +401,143 @@ void mode_dewpoint(void *pvParameter){
     }
 }
 
+void NVS_read_write(void *pvParameters){ // read variables on boot-up, then write whenever changed.
+
+    // Initialize NVS
+    err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        // NVS partition was truncated and needs to be erased
+        // Retry nvs_flash_init
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        err = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK( err );
+
+    // Open
+    printf("\n");
+    printf("Opening Non-Volatile Storage (NVS) handle... ");
+    // nvs_handle_t my_handle;
+    err = nvs_open("storage", NVS_READWRITE, &my_handle);
+    if (err != ESP_OK) {
+        printf("Error (%s) opening NVS handle!\n", esp_err_to_name(err));
+    } else {
+        printf("Done\n");
+
+        // Read
+        printf("Reading on_off_b_state from NVS ... ");
+        // int32_t restart_counter = 0; // value will default to 0, if not set yet in NVS
+        err = nvs_get_i32(my_handle, "on_off_b_state", &on_off_b_state);
+        err = nvs_get_i32(my_handle, "mode_b_state", &mode_b_state);
+        err = nvs_get_i32(my_handle, "grips_b_state", &grips_b_state);
+        err = nvs_get_i32(my_handle, "driver_b_state", &driver_b_state);
+        err = nvs_get_i32(my_handle, "pass_b_state", &pass_b_state);
+        err = nvs_get_i32(my_handle, "back_b_state", &back_b_state);
+        switch (err) {
+            case ESP_OK:
+                printf("Done\n");
+                printf("on_off_b_state = %d\n", on_off_b_state);
+                break;
+            case ESP_ERR_NVS_NOT_FOUND:
+                printf("The value is not initialized yet!\n");
+                break;
+            default :
+                printf("Error (%s) reading!\n", esp_err_to_name(err));
+            }
+            nvs_close(my_handle);
+        }
+    
+    // xTaskCreate(NVS_write, "NVS_write", 4 * configMINIMAL_STACK_SIZE, NULL, 4, NULL);
+
+    int on_off_b_state_old = 0;
+    int on_off_b_state_new = 0;
+
+    int mode_b_state_old= 0; 
+    int mode_b_state_new= 0; 
+
+    int grips_b_state_old = 0;
+    int grips_b_state_new = 0;
+
+    int grips_b_long_old = 0;
+    int grips_b_long_new = 0;
+
+    int driver_b_state_old = 0;
+    int driver_b_state_new = 0;
+
+    int pass_b_state_old = 0;
+    int pass_b_state_new = 0;
+
+    int back_b_state_old = 0;
+    int back_b_state_new = 0;
+
+
+    while(1){
+    
+        on_off_b_state_new  = on_off_b_state; 
+        mode_b_state_new    = mode_b_state; 
+        grips_b_state_new   = grips_b_state;
+        grips_b_long_new    = grips_b_long;
+        driver_b_state_new  = driver_b_state;
+        pass_b_state_new    = pass_b_state; 
+        back_b_state_new    = back_b_state; 
+
+        if(on_off_b_state_new != on_off_b_state_old){
+            on_off_b_state_old = on_off_b_state_new;
+            err = nvs_open("storage", NVS_READWRITE, &my_handle);
+            err = nvs_set_i32(my_handle, "on_off_b_state", on_off_b_state);
+            err = nvs_commit(my_handle);
+            nvs_close(my_handle);
+            printf("NVS updated with new on_off_b_state\n");
+            printf("New state is: %d\n", on_off_b_state);        
+        }
+
+        if(mode_b_state_new != mode_b_state_old){
+            mode_b_state_old = mode_b_state_new;
+            err = nvs_open("storage", NVS_READWRITE, &my_handle);
+            err = nvs_set_i32(my_handle, "mode_b_state", mode_b_state);
+            err = nvs_commit(my_handle);
+            nvs_close(my_handle);
+            printf("NVS updated with new mode_b_state\n");
+            printf("New state is: %d\n", mode_b_state);  
+
+        }
+        if(grips_b_state_new != grips_b_state_old){
+            grips_b_state_old = grips_b_state_new;
+            err = nvs_open("storage", NVS_READWRITE, &my_handle);
+            err = nvs_set_i32(my_handle, "grips_b_state", grips_b_state);
+            err = nvs_commit(my_handle);
+            nvs_close(my_handle);
+            printf("NVS updated with new grips_b_state\n");
+            printf("New state is: %d\n", grips_b_state); 
+        }
+        if(driver_b_state_new != driver_b_state_old){
+            driver_b_state_old = driver_b_state_new;
+            err = nvs_open("storage", NVS_READWRITE, &my_handle);
+            err = nvs_set_i32(my_handle, "driver_b_state", driver_b_state);
+            err = nvs_commit(my_handle);
+            nvs_close(my_handle);
+            printf("NVS updated with new driver_b_state\n");
+            printf("New state is: %d\n", driver_b_state); 
+        }
+        if(pass_b_state_new != pass_b_state_old){
+            pass_b_state_old = pass_b_state_new;
+            err = nvs_open("storage", NVS_READWRITE, &my_handle);
+            err = nvs_set_i32(my_handle, "pass_b_state", pass_b_state);
+            err = nvs_commit(my_handle);
+            nvs_close(my_handle); 
+            printf("NVS updated with new pass_b_state\n");
+            printf("New state is: %d\n", pass_b_state); 
+        }
+        if(back_b_state_new != back_b_state_old){
+            back_b_state_old = back_b_state_new;
+            err = nvs_open("storage", NVS_READWRITE, &my_handle);
+            err = nvs_set_i32(my_handle, "back_b_state", back_b_state);
+            err = nvs_commit(my_handle);
+            nvs_close(my_handle);
+            printf("NVS updated with new back_b_state\n");
+            printf("New state is: %d\n", back_b_state); 
+        }
+    }
+}
 
 void buttons_modes(void *pvParameter)
 {
@@ -492,9 +631,7 @@ void buttons_modes(void *pvParameter)
         ledc_channel_config(&ledc_channel[ch]);
     }
 
-    TaskHandle_t xMode_auto;
-    TaskHandle_t xMode_manual;
-    TaskHandle_t xMode_dewpoint;
+
 
     xTaskCreate(max7219, "max7219", 4 * configMINIMAL_STACK_SIZE, NULL, 4, NULL);
     xTaskCreate(&mode_auto, "mode_auto", 4* 1024, NULL, 4, &xMode_auto);
@@ -503,10 +640,15 @@ void buttons_modes(void *pvParameter)
     vTaskSuspend(xMode_manual);
     xTaskCreate(&mode_dewpoint, "mode_dewpoint", 4* 1024, NULL, 4, &xMode_dewpoint);
     vTaskSuspend(xMode_dewpoint);
+
+    xTaskCreate(NVS_read_write, "NVS_read_write", 4 * configMINIMAL_STACK_SIZE, NULL, 4, NULL);
     
+    // vTaskSuspend(xNVS_read);
+  
     int x[8]; // array to map power levels to duty cycles for PWM outputs
 
     while(1){ 
+
         // write power levels to LED levels aarray
             LED_levels[0] = &pl_0;
             LED_levels[1] = &pl_1;
@@ -530,27 +672,25 @@ void buttons_modes(void *pvParameter)
 
         for(int i=3; i<8;i++){  
             x[i]= duty_cycles[power_states[i]]; 
-
-            // ESP_LOGI(TAG, "X [%d] Press", x[i]); 
-            // ESP_LOGI(TAG, "duty cycle[%d] Press", duty_cycles[i]); 
-            // ESP_LOGI(TAG, "power states[%d] Press", power_states[i]); 
-            // vTaskDelay(pdMS_TO_TICKS(2000)); 
-
         } 
 
         if(on_off_b_state == 0){                // OFF state
-            
+
+            // err = nvs_open("storage", NVS_READWRITE, &my_handle);
+            // err = nvs_set_i32(my_handle, "on_off_b_state", on_off_b_state);
+            // err = nvs_commit(my_handle);
+
+            // nvs_close(my_handle);            
             vTaskSuspend(xMode_auto);
             vTaskSuspend(xMode_manual);
             vTaskSuspend(xMode_dewpoint);
-
+            
             pl_0 = 0;
             pl_1 = 0;
             pl_2 = 0;
             pl_3 = 0;
             pl_4 = 0;
             
-
             for (int i=0; i<3;i++){
                 ledc_set_duty(ledc_channel[i].speed_mode, ledc_channel[i].channel, 0);
                 ledc_update_duty(ledc_channel[i].speed_mode, ledc_channel[i].channel);
@@ -563,6 +703,12 @@ void buttons_modes(void *pvParameter)
 
         }
         else if (on_off_b_state == 1){          // ON state
+ 
+            // err = nvs_open("storage", NVS_READWRITE, &my_handle);
+            // err = nvs_set_i32(my_handle, "on_off_b_state", on_off_b_state);
+            // err = nvs_commit(my_handle);
+            // nvs_close(my_handle); 
+
             // mode state leds output
             for(int i=0; i<3; i++){  
                 ledc_set_duty(ledc_channel[i].speed_mode, ledc_channel[i].channel, mode_states[mode_b_state][i]);
@@ -588,13 +734,12 @@ void buttons_modes(void *pvParameter)
                 vTaskSuspend(xMode_auto);
                 vTaskSuspend(xMode_manual);
                 vTaskResume(xMode_dewpoint);
-            }
-
+            }           
+            // vTaskResume(xNVS_write);
         }
     }
 }        
             
-
 static void button_handler_task(void *arg)
 {
 
@@ -697,16 +842,8 @@ static void button_handler_task(void *arg)
     }
 }
 
-
-
-
-
 void app_main(void)
 {
-
-
-
-
     /*< Initialize Touch Element library */
     touch_elem_global_config_t element_global_config = TOUCH_ELEM_GLOBAL_DEFAULT_CONFIG();
     ESP_ERROR_CHECK(touch_element_install(&element_global_config));
@@ -742,16 +879,11 @@ void app_main(void)
         /* Add button element into waterproof guard sensor's protection */
         ESP_ERROR_CHECK(touch_element_waterproof_add(button_handle[i]));
 #endif
-    }
-    
+    }   
     ESP_LOGI(TAG, "Touch buttons create");
     /*< Create a monitor task to take Touch Button event */
     xTaskCreate(button_handler_task, "button_handler_task", 4 * 2048, NULL, 5, NULL);
     touch_element_start();
-
-
-
     xTaskCreate(dht22, "dht22", 4 * 2048, NULL, 4, NULL); // configMINIMAL_STACK_SIZE
-
     xTaskCreate(buttons_modes, "buttons_modes", 4 * 2048, NULL, 4, NULL);
 }

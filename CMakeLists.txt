@@ -2,7 +2,9 @@
 # in this exact order for cmake to work correctly
 cmake_minimum_required(VERSION 3.5)
 
-# set(EXTRA_COMPONENT_DIRS /home/torstein/Documents/esp/esp-idf-lib/components)
+
 set(EXTRA_COMPONENT_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/esp-idf-lib/components)
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(touch_element_waterproof)
+
+#littlefs_create_partition_image(littlefs flash_data)

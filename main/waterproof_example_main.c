@@ -163,7 +163,7 @@ bool release = false;       // for button logic
 #define LEDC_LS_MODE           LEDC_LOW_SPEED_MODE
 
 #define LEDC_CH_NUM       (8)
-#define LEDC_DUTY        (1000) //4000
+#define LEDC_DUTY        (1000) //4000 Mode buttons LED brightness
 #define LEDC_FADE_TIME    (3000)
 
 
@@ -172,6 +172,9 @@ int mode_b_state= 0;            // Current button state
 
 #define button_on_off 1
 int on_off_b_state = 0;
+
+#define button_on_off_duty_cycle 5
+int on_off_b_long = 0;
 
 #define button_grips 5
 int grips_b_state = 0;
@@ -201,7 +204,12 @@ int power_states[8]; // array with current power levels for the PWM outputs.
 
 uint32_t duty_cycles[6]={  // Set duty to e.g. 50%: ((2 ** 13) - 1) * 50% = 4095. This controls the PWM duty cycle for the 5 Mosfets
 //  0%, 20%,  40%,  60%,  80%, 100%    
-    0, 1638, 3276, 4914, 6552, 8190
+    0, 1638, 3276, 4914, 6552, 8191
+};
+
+uint32_t duty_cycles_LED[6]={  // Set duty to e.g. 50%: ((2 ** 13) - 1) * 50% = 4095. This controls the PWM duty cycle for the 5 Mosfets
+//  0%, 20%,  40%,  60%,  80%, 100%    
+    100, 500, 1000, 1500, 2000, 2500
 };
 
 // LEDc channels 0-2 use mode_states as input for the duty cycle
@@ -244,7 +252,7 @@ void dht22(void *pvParameters)
     }
 }
 
-void max7219(void *pvParameter)
+void max7219(void *pvParameters)
 {
     // esp_err_t res;
     
@@ -269,6 +277,7 @@ void max7219(void *pvParameter)
     ESP_ERROR_CHECK(max7219_init_desc(&dev, HOST, PIN_NUM_CS)); //Initialize device descriptor.
     ESP_ERROR_CHECK(max7219_init(&dev)); //initialize display
     ESP_ERROR_CHECK(max7219_clear(&dev)); //clear display
+
     size_t offs = 0;
 
     while (1)
@@ -284,7 +293,7 @@ void max7219(void *pvParameter)
     }
 }
 
-void mode_auto(void *pvParameter){
+void mode_auto(void *pvParameters){
     //Auto mode:
     // - inputs: Temp and Relative humidity.
     // -- Temp array give input to power level
@@ -348,7 +357,7 @@ void mode_auto(void *pvParameter){
     }
 }
 
-void mode_manual(void *pvParameter){
+void mode_manual(void *pvParameters){
     // Manual mode:
     // -All settings are set manual, settings are remembered between power cycles
     // teste om grips long press er true og erstatte [3] med tommel varme mens den er trykket + 3 sekunder, deretter tilbake igjen
@@ -375,7 +384,7 @@ void mode_manual(void *pvParameter){
     }
 }
 
-void mode_dewpoint(void *pvParameter){
+void mode_dewpoint(void *pvParameters){
 
     // Dewpoint mode:
     // -input: Relative humidity
@@ -432,6 +441,7 @@ void NVS_read_write(void *pvParameters){ // read variables on boot-up, then writ
         err = nvs_get_i32(my_handle, "driver_b_state", &driver_b_state);
         err = nvs_get_i32(my_handle, "pass_b_state", &pass_b_state);
         err = nvs_get_i32(my_handle, "back_b_state", &back_b_state);
+        err = nvs_get_i32(my_handle, "on_off_b_long", &on_off_b_long);
         switch (err) {
             case ESP_OK:
                 printf("Done\n");
@@ -469,6 +479,8 @@ void NVS_read_write(void *pvParameters){ // read variables on boot-up, then writ
     int back_b_state_old = 0;
     int back_b_state_new = 0;
 
+    int on_off_b_long_old = 0;
+    int on_off_b_long_new = 0;
 
     while(1){
     
@@ -479,6 +491,7 @@ void NVS_read_write(void *pvParameters){ // read variables on boot-up, then writ
         driver_b_state_new  = driver_b_state;
         pass_b_state_new    = pass_b_state; 
         back_b_state_new    = back_b_state; 
+        on_off_b_long_new   = on_off_b_long;
 
         if(on_off_b_state_new != on_off_b_state_old){
             on_off_b_state_old = on_off_b_state_new;
@@ -535,6 +548,15 @@ void NVS_read_write(void *pvParameters){ // read variables on boot-up, then writ
             nvs_close(my_handle);
             printf("NVS updated with new back_b_state\n");
             printf("New state is: %d\n", back_b_state); 
+        }
+        if(on_off_b_long_new != on_off_b_long_old){
+            on_off_b_long_old = on_off_b_long_new;
+            err = nvs_open("storage", NVS_READWRITE, &my_handle);
+            err = nvs_set_i32(my_handle, "on_off_b_long", on_off_b_long);
+            err = nvs_commit(my_handle);
+            nvs_close(my_handle);
+            printf("NVS updated with new on_off_b_long\n");
+            printf("New state is: %d\n", on_off_b_long); 
         }
     }
 }
@@ -645,9 +667,11 @@ void buttons_modes(void *pvParameter)
     
     // vTaskSuspend(xNVS_read);
   
-    int x[8]; // array to map power levels to duty cycles for PWM outputs
+    int x[8];   // array to map power levels to duty cycles for PWM outputs
+ 
 
     while(1){ 
+        int duty_new = duty_cycles_LED[on_off_b_long]; //map duty cycles for LED brightness        
 
         // write power levels to LED levels aarray
             LED_levels[0] = &pl_0;
@@ -663,6 +687,11 @@ void buttons_modes(void *pvParameter)
             power_states[5] = pl_2;
             power_states[6] = pl_1;
             power_states[7] = pl_0;
+
+        // update duty cycle in mode states array for LED dimming;
+            mode_states[1][1] = duty_new; 
+            mode_states[2][2] = duty_new; 
+            mode_states[3][3] = duty_new; 
             
           
         // Write button state to led matrix
@@ -670,6 +699,7 @@ void buttons_modes(void *pvParameter)
             symbols[i] = led_states[*LED_levels[i]];
         } 
 
+        // Write button states to PWM output channels for Mosfets
         for(int i=3; i<8;i++){  
             x[i]= duty_cycles[power_states[i]]; 
         } 
@@ -794,14 +824,36 @@ static void button_handler_task(void *arg)
             }
 
             else if((uint32_t)element_message.arg == 7){
-                ESP_LOGI(TAG, "button_on_off is pressed"); 
-                if(on_off_b_state >= button_on_off){
-                    on_off_b_state = 0;
+            //     ESP_LOGI(TAG, "button_on_off is pressed"); 
+            //     if(on_off_b_state >= button_on_off){
+            //         on_off_b_state = 0;
+            //         }
+            //     else if (on_off_b_state < 2){
+            //         on_off_b_state++;                    
+            //         }
+            // ESP_LOGI(TAG, "button_on_off mode[%d]", (int)on_off_b_state); 
+
+                if(press == true && long_press == false){
+                    ESP_LOGI(TAG, "button_on_off is pressed");                
+                    if(on_off_b_state >= button_on_off){
+                        on_off_b_state = 0;
                     }
-                else if (on_off_b_state < 2){
-                    on_off_b_state++;                    
+                    else if (on_off_b_state < 6){
+                        on_off_b_state++;                    
                     }
-            ESP_LOGI(TAG, "button_on_off mode[%d]", (int)on_off_b_state); 
+                    // nvs_set_i16(my_handle, "back_b_state", back_b_state);
+                    ESP_LOGI(TAG, "button_on_off mode[%d]", (int)grips_b_state); 
+                }
+                else if(press == false && long_press == true){
+                    ESP_LOGI(TAG, "button_on_off long pressed for LED duty dim control");                
+                    if(on_off_b_long >= button_on_off_duty_cycle){
+                        on_off_b_long = 1;      // start @ 1 to not dim LEDs to 0
+                    }
+                    else if (on_off_b_long < 6){
+                        on_off_b_long ++;                    
+                    }
+                    ESP_LOGI(TAG, "LED duty dim control[%d]", (int)on_off_b_long); 
+                }
             }
 
             else if ((uint32_t)element_message.arg == 10){

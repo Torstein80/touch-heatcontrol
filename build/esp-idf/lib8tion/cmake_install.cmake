@@ -1,4 +1,4 @@
-# Install script for directory: /home/torstein/Documents/touch1.1/touch_element_waterproof/esp-idf-lib/components/lib8tion
+# Install script for directory: /home/torstein/Documents/touch1.1/touch_element_waterproof/components/esp-idf-lib/components/lib8tion
 
 # Set the install prefix
 if(NOT DEFINED CMAKE_INSTALL_PREFIX)

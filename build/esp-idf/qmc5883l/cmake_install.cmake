@@ -1,4 +1,4 @@
-# Install script for directory: /home/torstein/Documents/touch1.1/touch_element_waterproof/esp-idf-lib/components/qmc5883l
+# Install script for directory: /home/torstein/Documents/touch1.1/touch_element_waterproof/components/esp-idf-lib/components/qmc5883l
 
 # Set the install prefix
 if(NOT DEFINED CMAKE_INSTALL_PREFIX)

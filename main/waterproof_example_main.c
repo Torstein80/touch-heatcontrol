@@ -29,20 +29,20 @@ Dewpoint mode:
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include "lvgl.h"
 #include "touch_element/touch_button.h"
 #include "driver/gpio.h"
 #include "esp_idf_version.h"
 #include "max7219.h"
 #include "stdio.h"
-#include "esp_littlefs.h"
 #include <dht.h>
 #include "driver/ledc.h"
 #include "esp_system.h"
 #include "esp_spi_flash.h"
 #include "esp_err.h"
-#include "esp_littlefs.h"
 #include "nvs_flash.h"
-#include "nvs.h"
+// #include "nvs.h"
+// #include "U8g2lib.h"
 
 
 
@@ -207,10 +207,15 @@ uint32_t duty_cycles[6]={  // Set duty to e.g. 50%: ((2 ** 13) - 1) * 50% = 4095
     0, 1638, 3276, 4914, 6552, 8191
 };
 
-uint32_t duty_cycles_LED[6]={  // Set duty to e.g. 50%: ((2 ** 13) - 1) * 50% = 4095. This controls the PWM duty cycle for the 5 Mosfets
-//  0%, 20%,  40%,  60%,  80%, 100%    
-    100, 500, 1000, 1500, 2000, 2500
+uint32_t duty_cycles_LED[6]={  // Duty cycle to control mode led brightness
+    5, 300, 2000, 5000, 7000, 8191
 };
+
+uint32_t max7219_LED_brighness[6]={  // Duty cycle to control mode led brightness
+    0, 2, 5, 9, 12, 15
+};
+
+int max7219_brightness = 0; 
 
 // LEDc channels 0-2 use mode_states as input for the duty cycle
 int mode_states[3][3]={ // LEDS_DUTY controls the mode LEDs light intensity
@@ -276,20 +281,25 @@ void max7219(void *pvParameters)
     };
     ESP_ERROR_CHECK(max7219_init_desc(&dev, HOST, PIN_NUM_CS)); //Initialize device descriptor.
     ESP_ERROR_CHECK(max7219_init(&dev)); //initialize display
-    ESP_ERROR_CHECK(max7219_clear(&dev)); //clear display
+    // ESP_ERROR_CHECK(max7219_clear(&dev)); //clear display
+    ESP_ERROR_CHECK(max7219_set_brightness(&dev, 0)); // max is 31
+    //esp_err_t max7219_set_shutdown_mode(max7219_t *dev, bool shutdown);
 
     size_t offs = 0;
 
     while (1)
-    {     
+    { 
+        max7219_set_brightness(&dev, max7219_brightness); // max7219_brightness is set in NVS_read_write
+        vTaskDelay(pdMS_TO_TICKS(20)); 
+
         for(uint8_t j = 0; j < CASCADE_SIZE; j++){
             // max7219_draw_image_8x8(&dev, i * 8, (uint8_t *)symbols + i * 8); // + offs               
             max7219_draw_image_8x8(&dev, j * 8, (uint8_t *)symbols + j * 8); //
             vTaskDelay(pdMS_TO_TICKS(SCROLL_DELAY)); 
         }             
-        if (++offs == symbols_size)
+        if (++offs == symbols_size){
             offs = 0;
-         
+        }
     }
 }
 
@@ -440,7 +450,7 @@ void NVS_read_write(void *pvParameters){ // read variables on boot-up, then writ
         err = nvs_get_i32(my_handle, "grips_b_state", &grips_b_state);
         err = nvs_get_i32(my_handle, "driver_b_state", &driver_b_state);
         err = nvs_get_i32(my_handle, "pass_b_state", &pass_b_state);
-        err = nvs_get_i32(my_handle, "back_b_state", &back_b_state);
+        err = nvs_get_i32(my_handle, "back_b_state",    &back_b_state);
         err = nvs_get_i32(my_handle, "on_off_b_long", &on_off_b_long);
         switch (err) {
             case ESP_OK:
@@ -561,6 +571,22 @@ void NVS_read_write(void *pvParameters){ // read variables on boot-up, then writ
     }
 }
 
+void brightness(void *pvParameters){
+
+    while(1){
+        // update duty cycle in mode states array for LED dimming;
+        int duty_new = duty_cycles_LED[on_off_b_long]; //map duty cycles for mode LED brightness 
+        vTaskDelay(pdMS_TO_TICKS(20));
+        mode_states[0][0] = duty_new; 
+        mode_states[1][1] = duty_new; 
+        mode_states[2][2] = duty_new; 
+
+        // Map brightness levels for max7219 driver        
+        max7219_brightness = max7219_LED_brighness[on_off_b_long];  
+    }
+
+}
+
 void buttons_modes(void *pvParameter)
 {
     ledc_timer_config_t ledc_timer = {
@@ -654,7 +680,6 @@ void buttons_modes(void *pvParameter)
     }
 
 
-
     xTaskCreate(max7219, "max7219", 4 * configMINIMAL_STACK_SIZE, NULL, 4, NULL);
     xTaskCreate(&mode_auto, "mode_auto", 4* 1024, NULL, 4, &xMode_auto);
     vTaskSuspend(xMode_auto);
@@ -662,16 +687,12 @@ void buttons_modes(void *pvParameter)
     vTaskSuspend(xMode_manual);
     xTaskCreate(&mode_dewpoint, "mode_dewpoint", 4* 1024, NULL, 4, &xMode_dewpoint);
     vTaskSuspend(xMode_dewpoint);
-
     xTaskCreate(NVS_read_write, "NVS_read_write", 4 * configMINIMAL_STACK_SIZE, NULL, 4, NULL);
-    
-    // vTaskSuspend(xNVS_read);
+    xTaskCreate(&brightness, "brightness", 4* 1024, NULL, 4, NULL);
   
     int x[8];   // array to map power levels to duty cycles for PWM outputs
  
-
     while(1){ 
-        int duty_new = duty_cycles_LED[on_off_b_long]; //map duty cycles for LED brightness        
 
         // write power levels to LED levels aarray
             LED_levels[0] = &pl_0;
@@ -688,11 +709,9 @@ void buttons_modes(void *pvParameter)
             power_states[6] = pl_1;
             power_states[7] = pl_0;
 
-        // update duty cycle in mode states array for LED dimming;
-            mode_states[1][1] = duty_new; 
-            mode_states[2][2] = duty_new; 
-            mode_states[3][3] = duty_new; 
-            
+
+
+
           
         // Write button state to led matrix
         for(uint8_t i = 0; i < 4; i++ ){ 
@@ -733,11 +752,6 @@ void buttons_modes(void *pvParameter)
 
         }
         else if (on_off_b_state == 1){          // ON state
- 
-            // err = nvs_open("storage", NVS_READWRITE, &my_handle);
-            // err = nvs_set_i32(my_handle, "on_off_b_state", on_off_b_state);
-            // err = nvs_commit(my_handle);
-            // nvs_close(my_handle); 
 
             // mode state leds output
             for(int i=0; i<3; i++){  

@@ -194,6 +194,9 @@ if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   include("/home/torstein/Documents/touch1.1/touch_element_waterproof/build/esp-idf/tsys01/cmake_install.cmake")
   include("/home/torstein/Documents/touch1.1/touch_element_waterproof/build/esp-idf/ultrasonic/cmake_install.cmake")
   include("/home/torstein/Documents/touch1.1/touch_element_waterproof/build/esp-idf/wiegand/cmake_install.cmake")
+  include("/home/torstein/Documents/touch1.1/touch_element_waterproof/build/esp-idf/lvgl/cmake_install.cmake")
+  include("/home/torstein/Documents/touch1.1/touch_element_waterproof/build/esp-idf/lvgl_esp32_drivers/cmake_install.cmake")
+  include("/home/torstein/Documents/touch1.1/touch_element_waterproof/build/esp-idf/u8g2/cmake_install.cmake")
 
 endif()
 

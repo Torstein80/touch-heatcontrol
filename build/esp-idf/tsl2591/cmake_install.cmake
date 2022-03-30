@@ -1,4 +1,4 @@
-# Install script for directory: /home/torstein/Documents/touch1.1/touch_element_waterproof/esp-idf-lib/components/tsl2591
+# Install script for directory: /home/torstein/Documents/touch1.1/touch_element_waterproof/components/esp-idf-lib/components/tsl2591
 
 # Set the install prefix
 if(NOT DEFINED CMAKE_INSTALL_PREFIX)

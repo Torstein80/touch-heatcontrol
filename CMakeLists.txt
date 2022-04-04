@@ -9,7 +9,10 @@ cmake_minimum_required(VERSION 3.5)
 #     "/u8g2" DIRECTORY
 # )
 # list(APPEND IDF_EXTRA_COMPONENT_DIRS ${EXTRA_COMPONENT_DIRS} ${CMAKE_CURRENT_SOURCE_DIR}/components)
-cmake_path(SET EXTRA_COMPONENT_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/components/esp-idf-lib/components)
+
+
+# cmake_path(SET EXTRA_COMPONENT_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/components/esp-idf-lib/components)
+
 
 # cmake_path(APPEND EXTRA_COMPONENT_DIRS ${CMAKE_CURRENT_SOURCE_DIR} "/esp-idf-lib/components")
 # APPEND (EXTRA_COMPONENT_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/u8g2)
@@ -23,6 +26,7 @@ cmake_path(SET EXTRA_COMPONENT_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/components/esp-i
 # idf_component_register(SRCS INCLUDE_DIRS "." "components/u8g2" "components/esp-idf-lib/components") #"waterproof_example_main.c" 
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+list(APPEND EXTRA_COMPONENT_DIRS components/lvgl_esp32_drivers components/lvgl components/esp-idf-lib/components)
 project(touch_element_waterproof)
 
 #littlefs_create_partition_image(littlefs flash_data)

@@ -10,7 +10,8 @@
     "*.inc": "c",
     "u8g2lib.h": "c",
     "esp_littlefs.h": "c",
-    "max7219.h": "c"
+    "max7219.h": "c",
+    "i2c.h": "c"
   },
   "idf.flashType": "UART"
 }

@@ -30,6 +30,9 @@ Dewpoint mode:
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "lvgl.h"
+
+#include "esp_freertos_hooks.h"
+#include "freertos/semphr.h"
 #include "touch_element/touch_button.h"
 #include "driver/gpio.h"
 #include "esp_idf_version.h"
@@ -41,8 +44,28 @@ Dewpoint mode:
 #include "esp_spi_flash.h"
 #include "esp_err.h"
 #include "nvs_flash.h"
-// #include "nvs.h"
-// #include "U8g2lib.h"
+
+// /* Littlevgl specific */
+// #ifdef LV_LVGL_H_INCLUDE_SIMPLE
+// #include "lvgl.h"
+// #else
+// #include "lvgl/lvgl.h"
+// #endif
+
+#include "lvgl_helpers.h"
+/*********************
+ *      DEFINES
+ *********************/
+
+#define LV_TICK_PERIOD_MS 1
+
+/**********************
+ *  STATIC PROTOTYPES
+ **********************/
+static void lv_tick_task(void *arg);
+static void guiTask(void *pvParameter);
+// static void oled_display(void);
+// static void label_refresher_task(void);
 
 
 
@@ -75,6 +98,7 @@ TaskHandle_t xNVS_write;
 nvs_handle_t my_handle;
 esp_err_t err;
 
+
 u_char symbols[] = { // Array for max7219 LED matrix
     0b00000000, // backrest leds
     0b00000000, // passenger seat leds
@@ -99,7 +123,7 @@ static const u_char led_states[] = { // Possible led states that can be assigned
 
 
 static const char *TAG = "Touch Element: ";
-static const char *TAG02 = "max7219 task";
+// static const char *TAG02 = "max7219 task";
 static const char *TAG03 = "DHT22: ";
 
 #define TOUCH_BUTTON_NUM     6
@@ -189,7 +213,7 @@ int driver_b_state = 0;
 int pass_b_state = 0;
 
 #define button_backrest 5
-uint16_t back_b_state = 0;
+int back_b_state = 0;
 
 int pl_0 = 0;               // input for power level backrest       @ array index 0
 int pl_1 = 0;               // input for power level passenger seat @ array index 1
@@ -228,8 +252,126 @@ int mode_states[3][3]={ // LEDS_DUTY controls the mode LEDs light intensity
 int16_t temperature = 0;
 int16_t humidity = 0;
 
+/* Creates a semaphore to handle concurrent call to lvgl stuff
+ * If you wish to call *any* lvgl function from other threads/tasks
+ * you should lock on the very same semaphore! */
+SemaphoreHandle_t xGuiSemaphore;
+
+static void guiTask(void *pvParameter) {
+
+    (void) pvParameter;
+    xGuiSemaphore = xSemaphoreCreateMutex();
+
+    lv_init();
+
+    /* Initialize SPI or I2C bus used by the drivers */
+    lvgl_driver_init();
+
+    lv_color_t* buf1 = heap_caps_malloc(DISP_BUF_SIZE * sizeof(lv_color_t), MALLOC_CAP_DMA);
+    assert(buf1 != NULL);
+
+    /* Use double buffered when not working with monochrome displays */
+#ifndef CONFIG_LV_TFT_DISPLAY_MONOCHROME
+    lv_color_t* buf2 = heap_caps_malloc(DISP_BUF_SIZE * sizeof(lv_color_t), MALLOC_CAP_DMA);
+    assert(buf2 != NULL);
+#else
+    static lv_color_t *buf2 = NULL;
+#endif
+
+    static lv_disp_buf_t disp_buf;
+
+    uint32_t size_in_px = DISP_BUF_SIZE;
+
+#if defined CONFIG_LV_TFT_DISPLAY_CONTROLLER_IL3820         \
+    || defined CONFIG_LV_TFT_DISPLAY_CONTROLLER_JD79653A    \
+    || defined CONFIG_LV_TFT_DISPLAY_CONTROLLER_UC8151D     \
+    || defined CONFIG_LV_TFT_DISPLAY_CONTROLLER_SSD1306
+
+    /* Actual size in pixels, not bytes. */
+    size_in_px *= 8;
+#endif
+
+    /* Initialize the working buffer depending on the selected display.
+     * NOTE: buf2 == NULL when using monochrome displays. */
+    lv_disp_buf_init(&disp_buf, buf1, buf2, size_in_px);
+
+    lv_disp_drv_t disp_drv;
+    lv_disp_drv_init(&disp_drv);
+    disp_drv.flush_cb = disp_driver_flush;
+
+    /* When using a monochrome display we need to register the callbacks:
+     * - rounder_cb
+     * - set_px_cb */
+#ifdef CONFIG_LV_TFT_DISPLAY_MONOCHROME
+    disp_drv.rounder_cb = disp_driver_rounder;
+    disp_drv.set_px_cb = disp_driver_set_px;
+#endif
+
+    disp_drv.buffer = &disp_buf;
+    lv_disp_drv_register(&disp_drv);
+
+    /* Register an input device when enabled on the menuconfig */
+#if CONFIG_LV_TOUCH_CONTROLLER != TOUCH_CONTROLLER_NONE
+    lv_indev_drv_t indev_drv;
+    lv_indev_drv_init(&indev_drv);
+    indev_drv.read_cb = touch_driver_read;
+    indev_drv.type = LV_INDEV_TYPE_POINTER;
+    lv_indev_drv_register(&indev_drv);
+#endif
+
+    /* Create and start a periodic timer interrupt to call lv_tick_inc */
+    const esp_timer_create_args_t periodic_timer_args = {
+        .callback = &lv_tick_task,
+        .name = "periodic_gui"
+    };
+    esp_timer_handle_t periodic_timer;
+    ESP_ERROR_CHECK(esp_timer_create(&periodic_timer_args, &periodic_timer));
+    ESP_ERROR_CHECK(esp_timer_start_periodic(periodic_timer, LV_TICK_PERIOD_MS * 1000));
+
+    // /* Create oled_display */
+    // oled_display();
+
+    while (1) {
+        /* Delay 1 tick (assumes FreeRTOS tick is 10ms */
+        vTaskDelay(pdMS_TO_TICKS(10));
+
+        /* Try to take the semaphore, call lvgl related function on success */
+        if (pdTRUE == xSemaphoreTake(xGuiSemaphore, portMAX_DELAY)) {
+            lv_task_handler();
+            xSemaphoreGive(xGuiSemaphore);
+       }
+    }
+
+    /* A task should NEVER return */
+    free(buf1);
+#ifndef CONFIG_LV_TFT_DISPLAY_MONOCHROME
+    free(buf2);
+#endif
+    vTaskDelete(NULL);
+}
+
+
+
+static void lv_tick_task(void *arg) {
+    (void) arg;
+
+    lv_tick_inc(LV_TICK_PERIOD_MS);
+}
+
+
 void dht22(void *pvParameters)
 {
+/* use a pretty small demo for monochrome displays */
+/* Get the current screen  */
+lv_obj_t * scr = lv_disp_get_scr_act(NULL);
+
+/*Create a Label on the currently active screen*/
+lv_obj_t * label1 =  lv_label_create(scr, NULL);
+
+/* Align the Label to the center
+    * NULL means align on parent (which is the screen now)
+    * 0, 0 at the end means an x, y offset after alignment*/
+lv_obj_align(label1, NULL, LV_ALIGN_CENTER, 0, 0);
 
 
     // DHT sensors that come mounted on a PCB generally have
@@ -242,9 +384,12 @@ void dht22(void *pvParameters)
     {
         // dht_read_data(sensor_type, dht_gpio, &humidity, &temperature);
         // ESP_LOGI(TAG03, "Humidity: %d%% Temp: %dC\n", humidity / 10, temperature / 10);
-        if (dht_read_data(sensor_type, dht_gpio, &humidity, &temperature) == ESP_OK)
+        if (dht_read_data(sensor_type, dht_gpio, &humidity, &temperature) == ESP_OK){
             ESP_LOGI(TAG03, "Humidity: %d%% Temp: %dC\n", humidity / 10, temperature / 10); 
             // printf("Humidity: %d%% Temp: %dC\n", humidity / 10, temperature / 10);
+            lv_label_set_text_fmt(label1, "Temp: %d", temperature / 10);
+        }
+
         else
             ESP_LOGI(TAG03, "Could not read data from sensor\n"); 
             // printf("Could not read data from sensor\n");
@@ -256,6 +401,8 @@ void dht22(void *pvParameters)
         vTaskDelay(pdMS_TO_TICKS(5000));
     }
 }
+
+
 
 void max7219(void *pvParameters)
 {
@@ -587,6 +734,8 @@ void brightness(void *pvParameters){
 
 }
 
+
+
 void buttons_modes(void *pvParameter)
 {
     ledc_timer_config_t ledc_timer = {
@@ -689,6 +838,7 @@ void buttons_modes(void *pvParameter)
     vTaskSuspend(xMode_dewpoint);
     xTaskCreate(NVS_read_write, "NVS_read_write", 4 * configMINIMAL_STACK_SIZE, NULL, 4, NULL);
     xTaskCreate(&brightness, "brightness", 4* 1024, NULL, 4, NULL);
+
   
     int x[8];   // array to map power levels to duty cycles for PWM outputs
  
@@ -908,8 +1058,13 @@ static void button_handler_task(void *arg)
     }
 }
 
+
 void app_main(void)
 {
+    xTaskCreatePinnedToCore(guiTask, "gui", 4096*2, NULL, 4, NULL, 1);
+    // lv_task_create(label_refresher_task, 100, LV_TASK_PRIO_MID, NULL);
+
+
     /*< Initialize Touch Element library */
     touch_elem_global_config_t element_global_config = TOUCH_ELEM_GLOBAL_DEFAULT_CONFIG();
     ESP_ERROR_CHECK(touch_element_install(&element_global_config));
@@ -952,4 +1107,9 @@ void app_main(void)
     touch_element_start();
     xTaskCreate(dht22, "dht22", 4 * 2048, NULL, 4, NULL); // configMINIMAL_STACK_SIZE
     xTaskCreate(buttons_modes, "buttons_modes", 4 * 2048, NULL, 4, NULL);
+
+    
+    
+    // xTaskCreate(&lv_example_label_1, "lv_example_label_1", 4 * 2048, NULL, 3, NULL);
+    
 }

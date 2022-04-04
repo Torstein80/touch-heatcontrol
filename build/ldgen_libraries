@@ -72,6 +72,8 @@
 /home/torstein/Documents/touch1.1/touch_element_waterproof/build/esp-idf/ulp/libulp.a
 /home/torstein/Documents/touch1.1/touch_element_waterproof/build/esp-idf/wifi_provisioning/libwifi_provisioning.a
 /home/torstein/Documents/touch1.1/touch_element_waterproof/build/esp-idf/main/libmain.a
+/home/torstein/Documents/touch1.1/touch_element_waterproof/build/esp-idf/lvgl/liblvgl.a
+/home/torstein/Documents/touch1.1/touch_element_waterproof/build/esp-idf/lvgl_esp32_drivers/liblvgl_esp32_drivers.a
 /home/torstein/Documents/touch1.1/touch_element_waterproof/build/esp-idf/i2cdev/libi2cdev.a
 /home/torstein/Documents/touch1.1/touch_element_waterproof/build/esp-idf/ads111x/libads111x.a
 /home/torstein/Documents/touch1.1/touch_element_waterproof/build/esp-idf/aht/libaht.a
@@ -142,6 +144,3 @@
 /home/torstein/Documents/touch1.1/touch_element_waterproof/build/esp-idf/tsys01/libtsys01.a
 /home/torstein/Documents/touch1.1/touch_element_waterproof/build/esp-idf/ultrasonic/libultrasonic.a
 /home/torstein/Documents/touch1.1/touch_element_waterproof/build/esp-idf/wiegand/libwiegand.a
-/home/torstein/Documents/touch1.1/touch_element_waterproof/build/esp-idf/lvgl/liblvgl.a
-/home/torstein/Documents/touch1.1/touch_element_waterproof/build/esp-idf/lvgl_esp32_drivers/liblvgl_esp32_drivers.a
-/home/torstein/Documents/touch1.1/touch_element_waterproof/build/esp-idf/u8g2/lib..a

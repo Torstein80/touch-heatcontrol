@@ -72,6 +72,8 @@ $<TARGET_FILE:__idf_touch_element>
 $<TARGET_FILE:__idf_ulp>
 $<TARGET_FILE:__idf_wifi_provisioning>
 $<TARGET_FILE:__idf_main>
+$<TARGET_FILE:__idf_lvgl>
+$<TARGET_FILE:__idf_lvgl_esp32_drivers>
 $<TARGET_FILE:__idf_i2cdev>
 $<TARGET_FILE:__idf_ads111x>
 $<TARGET_FILE:__idf_aht>
@@ -142,6 +144,3 @@ $<TARGET_FILE:__idf_tsl4531>
 $<TARGET_FILE:__idf_tsys01>
 $<TARGET_FILE:__idf_ultrasonic>
 $<TARGET_FILE:__idf_wiegand>
-$<TARGET_FILE:__idf_lvgl>
-$<TARGET_FILE:__idf_lvgl_esp32_drivers>
-$<TARGET_FILE:__idf_u8g2>

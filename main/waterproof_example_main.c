@@ -25,12 +25,14 @@ Dewpoint mode:
 -- Relative humidity > 90% set 100% power level for 30 minutes, then off
 */
 
-
+/*********************
+ *      INCLUDES
+ *********************/
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "lvgl.h"
-
+#include "lvgl_helpers.h"
 #include "esp_freertos_hooks.h"
 #include "freertos/semphr.h"
 #include "touch_element/touch_button.h"
@@ -45,60 +47,95 @@ Dewpoint mode:
 #include "esp_err.h"
 #include "nvs_flash.h"
 
-// /* Littlevgl specific */
-// #ifdef LV_LVGL_H_INCLUDE_SIMPLE
-// #include "lvgl.h"
-// #else
-// #include "lvgl/lvgl.h"
-// #endif
-
-#include "lvgl_helpers.h"
 /*********************
  *      DEFINES
  *********************/
 
+// LVGL display controller
 #define LV_TICK_PERIOD_MS 1
 
-/**********************
- *  STATIC PROTOTYPES
- **********************/
-static void lv_tick_task(void *arg);
-static void guiTask(void *pvParameter);
-// static void oled_display(void);
-// static void label_refresher_task(void);
-
-
-
-static const dht_sensor_type_t sensor_type = DHT_TYPE_AM2301; //AM2301 is for DHT22
-static const gpio_num_t dht_gpio = 38;
+// max7219 specific
+#define SCROLL_DELAY 50
+#define CASCADE_SIZE 1
 
 #ifndef APP_CPU_NUM
 #define APP_CPU_NUM PRO_CPU_NUM
 #endif
-
-#define SCROLL_DELAY 50
-#define CASCADE_SIZE 1
 
 #if ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(4, 0, 0)
 #define HOST    HSPI_HOST
 #else
 #define HOST    SPI2_HOST
 #endif
+#define PIN_NUM_MOSI 1  // DIN  pin 1 on max7219
+#define PIN_NUM_CLK  3  // CLK  pin 13 on max7219
+#define PIN_NUM_CS   2  // LOAD pin12 on max7219
 
-#define PIN_NUM_MOSI 1  //max 7219
-#define PIN_NUM_CLK  3  //max 7219
-#define PIN_NUM_CS   2  //LOAD pin12 on max 7219
+// modes specific
+#define led_auto 35         // gpio for mode LED
+#define led_manual 36       // gpio for mode LED
+#define led_dewpoint 37     // gpio for mode LED
 
+// button modes. e.g value 5 equals 6 modes: 0,1,2,3,4,5 and value 1 equals 2 modes: 0,1
+#define button_mode_button 2
+#define button_on_off 1
+#define button_on_off_duty_cycle 5
+#define button_grips 5
+#define button_grips_thumb 5
+#define button_driver_seat 5
+#define button_Passenger_seat 5
+#define button_backrest 5
+
+// touch button specific
+#define TOUCH_BUTTON_NUM        6       // total number of touch button channels, see channel array for details
+
+// PWM output specific
+#define LEDC_LS_CH0_GPIO       (35)     // PWM output channel for auto mode LED
+#define LEDC_LS_CH0_CHANNEL    LEDC_CHANNEL_0
+#define LEDC_LS_CH1_GPIO       (36)     // PWM output channel for manual mode LED
+#define LEDC_LS_CH1_CHANNEL    LEDC_CHANNEL_1
+#define LEDC_LS_CH2_GPIO       (37)     // PWM output channel for dewpoint mode LED
+#define LEDC_LS_CH2_CHANNEL    LEDC_CHANNEL_2
+#define LEDC_LS_CH3_GPIO       (16)     // PWM output channel for thumb heater
+#define LEDC_LS_CH3_CHANNEL    LEDC_CHANNEL_3
+#define LEDC_LS_CH4_GPIO       (17)     // PWM output channel for grip heater
+#define LEDC_LS_CH4_CHANNEL    LEDC_CHANNEL_4
+#define LEDC_LS_CH5_GPIO       (21)     // PWM output channel for driver seat heater
+#define LEDC_LS_CH5_CHANNEL    LEDC_CHANNEL_5
+#define LEDC_LS_CH6_GPIO       (33)     // PWM output channel for Passenger seat heater
+#define LEDC_LS_CH6_CHANNEL    LEDC_CHANNEL_6
+#define LEDC_LS_CH7_GPIO       (34)     // PWM output channel for Back rest heater
+#define LEDC_LS_CH7_CHANNEL    LEDC_CHANNEL_7
+#define LEDC_LS_TIMER          LEDC_TIMER_1
+#define LEDC_LS_MODE           LEDC_LOW_SPEED_MODE
+#define LEDC_CH_NUM             (8)     // total number of channels
+#define LEDC_DUTY               (1000) //4000 Mode buttons LED brightness
+#define LEDC_FADE_TIME          (3000)
+
+
+/**********************
+ *  STATIC TASKS
+ **********************/
+static void lv_tick_task(void *arg);
+static void guiTask(void *pvParameter);
+
+/**********************
+ *  HANDLES
+ **********************/
 TaskHandle_t xMode_auto;
 TaskHandle_t xMode_manual;
 TaskHandle_t xMode_dewpoint;
 TaskHandle_t xNVS_read_write;
 TaskHandle_t xNVS_write;
-
 nvs_handle_t my_handle;
 esp_err_t err;
+SemaphoreHandle_t xGuiSemaphore;    /* Creates a semaphore to handle concurrent call to lvgl stuff. If you wish to call *any* lvgl function from other threads/tasks you should lock on the very same semaphore! */
+static touch_button_handle_t button_handle[TOUCH_BUTTON_NUM]; // Touch buttons handle
 
 
+/**********************
+ *  ARRAYS
+ **********************/
 u_char symbols[] = { // Array for max7219 LED matrix
     0b00000000, // backrest leds
     0b00000000, // passenger seat leds
@@ -121,18 +158,7 @@ static const u_char led_states[] = { // Possible led states that can be assigned
     0b11111000      // 5 led
 };
 
-
-static const char *TAG = "Touch Element: ";
-// static const char *TAG02 = "max7219 task";
-static const char *TAG03 = "DHT22: ";
-
-#define TOUCH_BUTTON_NUM     6
-
-/*< Touch buttons handle */
-static touch_button_handle_t button_handle[TOUCH_BUTTON_NUM]; //Button handler
-
-/* Touch buttons channel array */
-static const touch_pad_t channel_array[TOUCH_BUTTON_NUM] = {
+static const touch_pad_t channel_array[TOUCH_BUTTON_NUM] = {    /* Touch buttons channel array */
     TOUCH_PAD_NUM4,     //button_backrest
     TOUCH_PAD_NUM5,     //button_Passenger_seat
     TOUCH_PAD_NUM6,     //button_driver_seat
@@ -141,8 +167,7 @@ static const touch_pad_t channel_array[TOUCH_BUTTON_NUM] = {
     TOUCH_PAD_NUM11,    //button_grips
 };
 
-/* Touch buttons channel sensitivity array */
-static const float channel_sens_array[TOUCH_BUTTON_NUM] = {
+static const float channel_sens_array[TOUCH_BUTTON_NUM] = {     /* Touch buttons channel sensitivity array */
     0.15F,
     0.15F,
     0.15F,
@@ -151,95 +176,23 @@ static const float channel_sens_array[TOUCH_BUTTON_NUM] = {
     0.15F,
 };
 
-bool press = false;         // for button logic
-bool long_press = false;    // for button logic
-bool release = false;       // for button logic
-
-#define led_auto 35         //gpio for mode LED
-#define led_manual 36       //gpio for mode LED
-#define led_dewpoint 37     //gpio for mode LED
-
-#define LEDC_LS_CH0_GPIO       (35)
-#define LEDC_LS_CH0_CHANNEL    LEDC_CHANNEL_0
-
-#define LEDC_LS_CH1_GPIO       (36)
-#define LEDC_LS_CH1_CHANNEL    LEDC_CHANNEL_1
-
-#define LEDC_LS_CH2_GPIO       (37)
-#define LEDC_LS_CH2_CHANNEL    LEDC_CHANNEL_2
-
-#define LEDC_LS_CH3_GPIO       (16)     //tmb PWM
-#define LEDC_LS_CH3_CHANNEL    LEDC_CHANNEL_3
-
-#define LEDC_LS_CH4_GPIO       (17)     //grip PWM
-#define LEDC_LS_CH4_CHANNEL    LEDC_CHANNEL_4
-
-#define LEDC_LS_CH5_GPIO       (21)     // driver seat PWM
-#define LEDC_LS_CH5_CHANNEL    LEDC_CHANNEL_5
-
-#define LEDC_LS_CH6_GPIO       (33)     // Passenger seat PWM
-#define LEDC_LS_CH6_CHANNEL    LEDC_CHANNEL_6
-
-#define LEDC_LS_CH7_GPIO       (34)     // Back rest PWM
-#define LEDC_LS_CH7_CHANNEL    LEDC_CHANNEL_7
-
-#define LEDC_LS_TIMER          LEDC_TIMER_1
-#define LEDC_LS_MODE           LEDC_LOW_SPEED_MODE
-
-#define LEDC_CH_NUM       (8)
-#define LEDC_DUTY        (1000) //4000 Mode buttons LED brightness
-#define LEDC_FADE_TIME    (3000)
-
-
-#define button_mode_button 2    // #of modes (0,1,2)
-int mode_b_state= 0;            // Current button state
-
-#define button_on_off 1
-int on_off_b_state = 0;
-
-#define button_on_off_duty_cycle 5
-int on_off_b_long = 0;
-
-#define button_grips 5
-int grips_b_state = 0;
-
-#define button_grips_thumb 5
-int grips_b_long = 0;
-
-#define button_driver_seat 5
-int driver_b_state = 0;
-
-#define button_Passenger_seat 5
-int pass_b_state = 0;
-
-#define button_backrest 5
-int back_b_state = 0;
-
-int pl_0 = 0;               // input for power level backrest       @ array index 0
-int pl_1 = 0;               // input for power level passenger seat @ array index 1
-int pl_2 = 0;               // input for power level driver seat    @ array index 2
-int pl_3 = 0;               // input for power level grips          @ array index 3
-int pl_4 = 0;               // input for power level thumb throttle
-
 int *LED_levels[4];   // array with current power levels used for LED array, input may come from different modes/user input
 
-// LEDc channels 3-7 use power_states as input for the duty cycle
-int power_states[8]; // array with current power levels for the PWM outputs.
+// LEDc channels 3-7 use power_levels as input for the duty cycle
+int power_levels[8]; // array with current power levels for the PWM outputs.
 
-uint32_t duty_cycles[6]={  // Set duty to e.g. 50%: ((2 ** 13) - 1) * 50% = 4095. This controls the PWM duty cycle for the 5 Mosfets
+uint32_t duty_cycles[6]={  // PWM duty cycle preset values for the 5 Mosfets. 13 bit resolution: set duty to e.g. 50%: ((2 ** 13) - 1) * 50% = 4095.
 //  0%, 20%,  40%,  60%,  80%, 100%    
     0, 1638, 3276, 4914, 6552, 8191
 };
 
-uint32_t duty_cycles_LED[6]={  // Duty cycle to control mode led brightness
+uint32_t duty_cycles_LED[6]={  // Duty cycle preset values to control mode led brightness. 13 bit resolution: set duty to e.g. 50%: ((2 ** 13) - 1) * 50% = 4095
     5, 300, 2000, 5000, 7000, 8191
 };
 
-uint32_t max7219_LED_brighness[6]={  // Duty cycle to control mode led brightness
+uint32_t max7219_LED_brightness[6]={  // Duty cycle to control mode led array brightness. Value has to be between 0-15
     0, 2, 5, 9, 12, 15
 };
-
-int max7219_brightness = 0; 
 
 // LEDc channels 0-2 use mode_states as input for the duty cycle
 int mode_states[3][3]={ // LEDS_DUTY controls the mode LEDs light intensity
@@ -247,41 +200,64 @@ int mode_states[3][3]={ // LEDS_DUTY controls the mode LEDs light intensity
     {0, LEDC_DUTY, 0},
     {0, 0, LEDC_DUTY}
 };
-// const static size_t mode_states_size = sizeof(mode_states);
 
-int16_t temperature = 0;
-int16_t humidity = 0;
+/**********************
+ *  TAGS
+ **********************/
+static const char *TAG = "Touch Element: ";
+static const char *TAG03 = "DHT22: ";
 
-/* Creates a semaphore to handle concurrent call to lvgl stuff
- * If you wish to call *any* lvgl function from other threads/tasks
- * you should lock on the very same semaphore! */
-SemaphoreHandle_t xGuiSemaphore;
+/**********************
+ *  DHT22
+ **********************/
+static const dht_sensor_type_t sensor_type = DHT_TYPE_AM2301; //AM2301 is for DHT22
+static const gpio_num_t dht_gpio = 38;
 
-static void guiTask(void *pvParameter) {
+/**********************
+ *  VARIABLES
+ **********************/
+// for button logic
+bool press      = false;    
+bool long_press = false;
+bool release    = false;
 
+// Current button state
+int mode_b_state    = 0;    
+int on_off_b_state  = 0;
+int on_off_b_long   = 0;
+int grips_b_state   = 0;
+int grips_b_long    = 0;
+int driver_b_state  = 0;
+int pass_b_state    = 0;
+int back_b_state    = 0;
+
+int pl_0 = 0;               // input for power level backrest       @ array index 0
+int pl_1 = 0;               // input for power level passenger seat @ array index 1
+int pl_2 = 0;               // input for power level driver seat    @ array index 2
+int pl_3 = 0;               // input for power level grips          @ array index 3
+int pl_4 = 0;               // input for power level thumb throttle
+
+int max7219_brightness = 0;
+
+int16_t temperature = 0;    //var for DHT22 temp
+int16_t humidity = 0;       //var for DHT22 relative humidity
+
+
+/**********************
+ *  TASKS
+ **********************/
+static void guiTask(void *pvParameter) {    // display setup
     (void) pvParameter;
     xGuiSemaphore = xSemaphoreCreateMutex();
-
     lv_init();
-
     /* Initialize SPI or I2C bus used by the drivers */
     lvgl_driver_init();
-
     lv_color_t* buf1 = heap_caps_malloc(DISP_BUF_SIZE * sizeof(lv_color_t), MALLOC_CAP_DMA);
     assert(buf1 != NULL);
-
-    /* Use double buffered when not working with monochrome displays */
-#ifndef CONFIG_LV_TFT_DISPLAY_MONOCHROME
-    lv_color_t* buf2 = heap_caps_malloc(DISP_BUF_SIZE * sizeof(lv_color_t), MALLOC_CAP_DMA);
-    assert(buf2 != NULL);
-#else
     static lv_color_t *buf2 = NULL;
-#endif
 
     static lv_disp_buf_t disp_buf;
-
     uint32_t size_in_px = DISP_BUF_SIZE;
-
 #if defined CONFIG_LV_TFT_DISPLAY_CONTROLLER_IL3820         \
     || defined CONFIG_LV_TFT_DISPLAY_CONTROLLER_JD79653A    \
     || defined CONFIG_LV_TFT_DISPLAY_CONTROLLER_UC8151D     \
@@ -310,15 +286,6 @@ static void guiTask(void *pvParameter) {
     disp_drv.buffer = &disp_buf;
     lv_disp_drv_register(&disp_drv);
 
-    /* Register an input device when enabled on the menuconfig */
-#if CONFIG_LV_TOUCH_CONTROLLER != TOUCH_CONTROLLER_NONE
-    lv_indev_drv_t indev_drv;
-    lv_indev_drv_init(&indev_drv);
-    indev_drv.read_cb = touch_driver_read;
-    indev_drv.type = LV_INDEV_TYPE_POINTER;
-    lv_indev_drv_register(&indev_drv);
-#endif
-
     /* Create and start a periodic timer interrupt to call lv_tick_inc */
     const esp_timer_create_args_t periodic_timer_args = {
         .callback = &lv_tick_task,
@@ -327,9 +294,6 @@ static void guiTask(void *pvParameter) {
     esp_timer_handle_t periodic_timer;
     ESP_ERROR_CHECK(esp_timer_create(&periodic_timer_args, &periodic_timer));
     ESP_ERROR_CHECK(esp_timer_start_periodic(periodic_timer, LV_TICK_PERIOD_MS * 1000));
-
-    // /* Create oled_display */
-    // oled_display();
 
     while (1) {
         /* Delay 1 tick (assumes FreeRTOS tick is 10ms */
@@ -350,61 +314,54 @@ static void guiTask(void *pvParameter) {
     vTaskDelete(NULL);
 }
 
-
-
-static void lv_tick_task(void *arg) {
+static void lv_tick_task(void *arg) {   // LVGL specific
     (void) arg;
 
     lv_tick_inc(LV_TICK_PERIOD_MS);
 }
 
-
-void dht22(void *pvParameters)
+void dht22(void *pvParameters)  // temp and relative humidity sensor, write temp and humidity values to display
 {
-/* use a pretty small demo for monochrome displays */
-/* Get the current screen  */
-lv_obj_t * scr = lv_disp_get_scr_act(NULL);
-
-/*Create a Label on the currently active screen*/
-lv_obj_t * label1 =  lv_label_create(scr, NULL);
-
-/* Align the Label to the center
-    * NULL means align on parent (which is the screen now)
-    * 0, 0 at the end means an x, y offset after alignment*/
-lv_obj_align(label1, NULL, LV_ALIGN_CENTER, 0, 0);
-
-
-    // DHT sensors that come mounted on a PCB generally have
-    // pull-up resistors on the data pin.  It is recommended
-    // to provide an external pull-up resistor otherwise...
-
+    // dht22 spesific
     gpio_set_pull_mode(dht_gpio, GPIO_PULLUP_ONLY);
+
+    // display spesific
+    /* Get the current screen  */
+    lv_obj_t * scr = lv_disp_get_scr_act(NULL);
+
+    // Temp setup
+    static lv_style_t style_temp;                                                   // create style
+    lv_style_init(&style_temp);                                                     // initiate style
+    lv_style_set_text_font(&style_temp, LV_STATE_DEFAULT, &lv_font_montserrat_48);  // set font type for style
+    lv_obj_t * label1_temp =  lv_label_create(scr, NULL);                           // Create label on the currently active screen*/
+    lv_obj_add_style(label1_temp,LV_OBJ_PART_MAIN, &style_temp);                    // add style to label
+    lv_obj_align(label1_temp, NULL, LV_ALIGN_IN_TOP_MID, 5, 0);                     // Set label position on screen
+
+    // Humidity setup
+    static lv_style_t style_humidity;
+    lv_style_init(&style_humidity);
+    lv_style_set_text_font(&style_humidity, LV_STATE_DEFAULT, &lv_font_montserrat_14);
+    lv_obj_t * label2_humidity =  lv_label_create(scr, NULL);
+    lv_obj_add_style(label2_humidity,LV_OBJ_PART_MAIN, &style_humidity);    
+    lv_obj_align(label2_humidity, NULL, LV_ALIGN_IN_BOTTOM_MID, -36, 0);
+
+    
 
     while (1)
     {
-        // dht_read_data(sensor_type, dht_gpio, &humidity, &temperature);
-        // ESP_LOGI(TAG03, "Humidity: %d%% Temp: %dC\n", humidity / 10, temperature / 10);
         if (dht_read_data(sensor_type, dht_gpio, &humidity, &temperature) == ESP_OK){
-            ESP_LOGI(TAG03, "Humidity: %d%% Temp: %dC\n", humidity / 10, temperature / 10); 
-            // printf("Humidity: %d%% Temp: %dC\n", humidity / 10, temperature / 10);
-            lv_label_set_text_fmt(label1, "Temp: %d", temperature / 10);
+            ESP_LOGI(TAG03, "Humidity: %d%% Temp: %dC\n", humidity / 10, temperature / 10); // for logging                        
+            lv_label_set_text_fmt(label1_temp, "%dC", (temperature / 10));                    // Write temp to display          
+            lv_label_set_text_fmt(label2_humidity, "Humidity  %d%%.", humidity / 10);          // Write relative humidity to display
         }
-
         else
-            ESP_LOGI(TAG03, "Could not read data from sensor\n"); 
-            // printf("Could not read data from sensor\n");
-            
-
-        // If you read the sensor data too often, it will heat up
-        // http://www.kandrsmith.org/RJS/Misc/Hygrometers/dht_sht_how_fast.html
-        
-        vTaskDelay(pdMS_TO_TICKS(5000));
+            ESP_LOGI(TAG03, "Could not read data from sensor\n");                   
+        // http://www.kandrsmith.org/RJS/Misc/Hygrometers/dht_sht_how_fast.html        
+        vTaskDelay(pdMS_TO_TICKS(5000)); // If you read the sensor data too often, it will heat up
     }
 }
 
-
-
-void max7219(void *pvParameters)
+void max7219(void *pvParameters)    // read and shift bits to max7219 LED driver chip
 {
     // esp_err_t res;
     
@@ -718,7 +675,7 @@ void NVS_read_write(void *pvParameters){ // read variables on boot-up, then writ
     }
 }
 
-void brightness(void *pvParameters){
+void brightness(void *pvParameters){    // adjust max7219 LED array and mode LEDs brightness with on/off button long press
 
     while(1){
         // update duty cycle in mode states array for LED dimming;
@@ -729,14 +686,12 @@ void brightness(void *pvParameters){
         mode_states[2][2] = duty_new; 
 
         // Map brightness levels for max7219 driver        
-        max7219_brightness = max7219_LED_brighness[on_off_b_long];  
+        max7219_brightness = max7219_LED_brightness[on_off_b_long];  
     }
 
 }
 
-
-
-void buttons_modes(void *pvParameter)
+void buttons_modes(void *pvParameter)   // coordinate modes and tasks based on button states, set PWM outputs for mode LEDs and power board Mosfets
 {
     ledc_timer_config_t ledc_timer = {
         .duty_resolution = LEDC_TIMER_13_BIT, // resolution of PWM duty
@@ -840,29 +795,25 @@ void buttons_modes(void *pvParameter)
     xTaskCreate(&brightness, "brightness", 4* 1024, NULL, 4, NULL);
 
   
-    int x[8];   // array to map power levels to duty cycles for PWM outputs
+    int temp_duty_cycles[8];   // temporary array to map power levels to duty cycles for PWM outputs
  
     while(1){ 
 
-        // write power levels to LED levels aarray
+        // write power levels to max7219 LED levels array
             LED_levels[0] = &pl_0;
             LED_levels[1] = &pl_1;
             LED_levels[2] = &pl_2;
             LED_levels[3] = &pl_3;
-        // write power levels for the PWM outputs
-            power_states[0] = 0;    //not in use
-            power_states[1] = 0;    //not in use
-            power_states[2] = 0;    //not in use
-            power_states[3] = pl_4;
-            power_states[4] = pl_3;
-            power_states[5] = pl_2;
-            power_states[6] = pl_1;
-            power_states[7] = pl_0;
-
-
-
-
-          
+        // write power levels for the PWM outputs to duty_cycles
+            power_levels[0] = 0;    //not in use
+            power_levels[1] = 0;    //not in use
+            power_levels[2] = 0;    //not in use
+            power_levels[3] = pl_4;
+            power_levels[4] = pl_3;
+            power_levels[5] = pl_2;
+            power_levels[6] = pl_1;
+            power_levels[7] = pl_0;
+        
         // Write button state to led matrix
         for(uint8_t i = 0; i < 4; i++ ){ 
             symbols[i] = led_states[*LED_levels[i]];
@@ -870,16 +821,10 @@ void buttons_modes(void *pvParameter)
 
         // Write button states to PWM output channels for Mosfets
         for(int i=3; i<8;i++){  
-            x[i]= duty_cycles[power_states[i]]; 
+            temp_duty_cycles[i]= duty_cycles[power_levels[i]]; 
         } 
 
-        if(on_off_b_state == 0){                // OFF state
-
-            // err = nvs_open("storage", NVS_READWRITE, &my_handle);
-            // err = nvs_set_i32(my_handle, "on_off_b_state", on_off_b_state);
-            // err = nvs_commit(my_handle);
-
-            // nvs_close(my_handle);            
+        if(on_off_b_state == 0){                // OFF state           
             vTaskSuspend(xMode_auto);
             vTaskSuspend(xMode_manual);
             vTaskSuspend(xMode_dewpoint);
@@ -896,7 +841,7 @@ void buttons_modes(void *pvParameter)
             }
                 // set duty cycle for PWM outputs. 0-5 = 0-100%
             for(int i=3; i<8; i++){  
-                    ledc_set_duty(ledc_channel[i].speed_mode, ledc_channel[i].channel, x[i]);
+                    ledc_set_duty(ledc_channel[i].speed_mode, ledc_channel[i].channel, temp_duty_cycles[i]);
                     ledc_update_duty(ledc_channel[i].speed_mode, ledc_channel[i].channel);  
             }
 
@@ -910,7 +855,7 @@ void buttons_modes(void *pvParameter)
             }
                 // set duty cycle for PWM outputs. 0-5 = 0-100%
             for(int i=3; i<8; i++){  
-                    ledc_set_duty(ledc_channel[i].speed_mode, ledc_channel[i].channel, x[i]);
+                    ledc_set_duty(ledc_channel[i].speed_mode, ledc_channel[i].channel, temp_duty_cycles[i]);
                     ledc_update_duty(ledc_channel[i].speed_mode, ledc_channel[i].channel);  
             }
             
@@ -929,12 +874,11 @@ void buttons_modes(void *pvParameter)
                 vTaskSuspend(xMode_manual);
                 vTaskResume(xMode_dewpoint);
             }           
-            // vTaskResume(xNVS_write);
         }
     }
 }        
             
-static void button_handler_task(void *arg)
+static void button_handler_task(void *arg)  // read the touch buttons and update button states
 {
 
     touch_elem_message_t element_message;

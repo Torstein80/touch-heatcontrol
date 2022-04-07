@@ -54,8 +54,10 @@ The microcontroller reads the user input from the touch elements and output sign
 
 ### DHT22 temp and humidity sensor
 ![dht22](pictures/dht22.jpeg)
+[dht22 datasheet](https://www.sparkfun.com/datasheets/Sensors/Temperature/DHT22.pdf)
 
 ### Max7219 LED driver
+![max9217 chip](pictures/max7219_chip.jpg)
 [max7219 datasheet](https://datasheets.maximintegrated.com/en/ds/MAX7219-MAX7221.pdf)
 
 ## Power board
